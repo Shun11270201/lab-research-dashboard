@@ -39,7 +39,7 @@ export default function ChatBotInterface() {
     {
       id: '1',
       role: 'assistant',
-      content: 'こんにちは！中西研究室のRAG ChatBotです。\n\n📚 **既に読み込み済みの研究資料（39件）：**\n・深層学習（CNN、ResNet、EfficientNet、Vision Transformer）\n・自然言語処理（Transformer、BERT、GPT、感情分析）\n・説明可能AI（LIME、SHAP、Grad-CAM、LRP、医療診断）\n・強化学習（Q学習、DQN、PPO、マルチエージェント）\n・IoT・エッジコンピューティング（モデル軽量化、量子化）\n・ブロックチェーン（スマートコントラクト、Ethereum）\n・連合学習（FedAvg、Non-IID、プライバシー保護）\n・Graph Neural Network（GCN、GraphSAGE、GAT）\n・その他多数の先端研究テーマ\n\n📖 これらの豊富な研究資料について、お気軽に質問してください！具体的な手法、実験結果、実装詳細まで詳しく説明いたします。',
+      content: 'こんにちは！中西研究室のRAG ChatBotです。\n\n📚 **既に読み込み済みの人間工学研究（38件）：**\n・認知工学（Eye-tracking、fNIRS、認知負荷測定）\n・ユーザビリティ評価（SD法、AHP、感性工学）\n・VR・空間認知（HMD、距離知覚、モーションキャプチャ）\n・ヒューマンエラー（SHERPA、IoT監視、事故防止）\n・高齢者インターフェース（認知機能、ユニバーサルデザイン）\n・疲労・ストレス評価（VAS、生理指標、VDT作業）\n・チームワーク（航空管制、コミュニケーション分析）\n・安全人間工学（危険予知、機械学習、リスク評価）\n・作業姿勢・生体力学・音響心理学・感性評価など\n\n🔬 これらの豊富な人間工学研究について、お気軽に質問してください！実験手法、測定技術、設計指針まで詳しく説明いたします。',
       timestamp: new Date(),
     }
   ])
