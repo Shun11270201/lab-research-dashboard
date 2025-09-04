@@ -72,10 +72,16 @@ export default function TranslationService() {
       })
 
       if (!extractResponse.ok) {
-        throw new Error('PDFの処理に失敗しました')
+        const errorData = await extractResponse.json().catch(() => ({}))
+        console.error('PDF processing error:', errorData)
+        throw new Error(`PDFの処理に失敗しました: ${errorData.error || 'Unknown error'}`)
       }
 
       const { text } = await extractResponse.json()
+      
+      if (!text || text.trim().length === 0) {
+        throw new Error('PDFからテキストを抽出できませんでした。テキストが含まれているPDFファイルを使用してください。')
+      }
       
       // 翻訳処理を開始
       await processTranslation(file.name, text)
@@ -115,7 +121,9 @@ export default function TranslationService() {
       })
 
       if (!response.ok) {
-        throw new Error('翻訳処理に失敗しました')
+        const errorData = await response.json().catch(() => ({}))
+        console.error('Translation API error:', errorData)
+        throw new Error(`翻訳処理に失敗しました: ${errorData.error || 'Unknown error'}`)
       }
 
       const result = await response.json()

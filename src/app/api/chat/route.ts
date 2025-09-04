@@ -62,7 +62,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json({ error: 'OpenAI API key not configured' }, { status: 500 })
+      console.error('OPENAI_API_KEY is not set in environment variables')
+      return NextResponse.json({ error: 'OpenAI API key not configured. Please add OPENAI_API_KEY to Vercel environment variables.' }, { status: 500 })
     }
 
     // 関連する知識を検索
