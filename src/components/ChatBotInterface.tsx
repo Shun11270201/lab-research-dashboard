@@ -39,7 +39,7 @@ export default function ChatBotInterface() {
     {
       id: '1',
       role: 'assistant',
-      content: 'こんにちは！中西研究室のRAG ChatBotです。\n\n📚 **既に読み込み済みの研究資料：**\n・深層学習・画像認識に関する研究\n・自然言語処理・Transformerに関する研究\n・説明可能AI・医療診断に関する研究\n・強化学習・自動運転に関する研究\n・IoT・エッジコンピューティングに関する研究\n・ブロックチェーン技術応用に関する研究\n・連合学習・Graph Neural Networkに関する研究\n\n📖 これらの研究内容について、お気軽に質問してください！具体的な手法や実験結果、関連技術について詳しく説明いたします。',
+      content: 'こんにちは！中西研究室のRAG ChatBotです。\n\n📚 **既に読み込み済みの研究資料（39件）：**\n・深層学習（CNN、ResNet、EfficientNet、Vision Transformer）\n・自然言語処理（Transformer、BERT、GPT、感情分析）\n・説明可能AI（LIME、SHAP、Grad-CAM、LRP、医療診断）\n・強化学習（Q学習、DQN、PPO、マルチエージェント）\n・IoT・エッジコンピューティング（モデル軽量化、量子化）\n・ブロックチェーン（スマートコントラクト、Ethereum）\n・連合学習（FedAvg、Non-IID、プライバシー保護）\n・Graph Neural Network（GCN、GraphSAGE、GAT）\n・その他多数の先端研究テーマ\n\n📖 これらの豊富な研究資料について、お気軽に質問してください！具体的な手法、実験結果、実装詳細まで詳しく説明いたします。',
       timestamp: new Date(),
     }
   ])
