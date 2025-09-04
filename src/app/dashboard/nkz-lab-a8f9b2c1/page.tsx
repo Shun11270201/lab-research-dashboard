@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { 
   FileText, 
   Languages, 
@@ -10,7 +10,10 @@ import {
   Sparkles,
   ArrowRight,
   Brain,
-  Zap
+  Zap,
+  Lock,
+  Eye,
+  EyeOff
 } from 'lucide-react'
 import PdfProcessor from '@/components/PdfProcessor'
 import TranslationService from '@/components/TranslationService'
@@ -20,6 +23,87 @@ type ActiveTab = 'overview' | 'pdf' | 'translate' | 'chat'
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview')
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+
+  const LAB_PASSWORD = 'nakanishi-lab'
+
+  useEffect(() => {
+    const auth = localStorage.getItem('lab-auth')
+    if (auth === LAB_PASSWORD) {
+      setIsAuthenticated(true)
+    }
+  }, [])
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (password === LAB_PASSWORD) {
+      setIsAuthenticated(true)
+      localStorage.setItem('lab-auth', LAB_PASSWORD)
+      setError('')
+    } else {
+      setError('パスワードが正しくありません')
+      setPassword('')
+    }
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 flex items-center justify-center p-4">
+        <div className="glass-effect rounded-2xl p-8 w-full max-w-md">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Lock className="w-8 h-8 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold mb-2">中西研究室</h1>
+            <p className="text-gray-400">Research Dashboard</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-6">
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-2">
+                研究室パスワード
+              </label>
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-800/50 border border-gray-600 rounded-lg focus:border-blue-500 focus:outline-none transition-colors"
+                  placeholder="パスワードを入力してください"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-300"
+                >
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
+              </div>
+              {error && (
+                <p className="mt-2 text-sm text-red-400">{error}</p>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium py-3 px-4 rounded-lg transition-all duration-300 hover-glow"
+            >
+              ログイン
+            </button>
+          </form>
+
+          <div className="mt-6 text-center text-xs text-gray-500">
+            中西研究室メンバー専用システム
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const menuItems = [
     {
