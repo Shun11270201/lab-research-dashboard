@@ -62,6 +62,26 @@ export default function TranslationService() {
     setError('')
 
     try {
+      // ファイル検証
+      console.log('File info:', {
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        lastModified: new Date(file.lastModified).toISOString()
+      })
+
+      if (file.size === 0) {
+        throw new Error('ファイルが空です。有効なPDFファイルを選択してください。')
+      }
+
+      if (file.size > 50 * 1024 * 1024) { // 50MB制限
+        throw new Error('ファイルサイズが大きすぎます（50MB以下にしてください）。')
+      }
+
+      if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
+        throw new Error('PDFファイルを選択してください。')
+      }
+
       // PDFからテキストを抽出
       const formData = new FormData()
       formData.append('pdf', file)
@@ -72,9 +92,16 @@ export default function TranslationService() {
       })
 
       if (!extractResponse.ok) {
-        const errorData = await extractResponse.json().catch(() => ({}))
+        const errorData = await extractResponse.json().catch(() => ({ error: 'Response parsing failed' }))
         console.error('PDF processing error:', errorData)
-        throw new Error(`PDFの処理に失敗しました: ${errorData.error || 'Unknown error'}`)
+        console.error('Full response:', {
+          status: extractResponse.status,
+          statusText: extractResponse.statusText,
+          headers: Object.fromEntries(extractResponse.headers.entries())
+        })
+        
+        const errorMessage = errorData.error || `HTTPエラー: ${extractResponse.status} ${extractResponse.statusText}`
+        throw new Error(`PDFの処理に失敗しました: ${errorMessage}`)
       }
 
       const { text } = await extractResponse.json()

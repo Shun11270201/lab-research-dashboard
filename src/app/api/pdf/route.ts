@@ -12,9 +12,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No PDF file provided' }, { status: 400 })
     }
 
+    // ファイル情報をログ出力
+    console.log('Processing file:', {
+      name: file.name,
+      size: file.size,
+      type: file.type
+    })
+
+    // ファイルサイズ制限
+    if (file.size > 50 * 1024 * 1024) {
+      return NextResponse.json({ error: 'File size too large (max 50MB)' }, { status: 400 })
+    }
+
     // PDF を Buffer に変換
     const fileBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(fileBuffer)
+    
+    // Buffer検証
+    if (buffer.length === 0) {
+      return NextResponse.json({ error: 'Empty file buffer' }, { status: 400 })
+    }
     
     // PDF からテキストを抽出
     const data = await pdf(buffer)
@@ -58,8 +75,19 @@ export async function POST(req: NextRequest) {
 
   } catch (error) {
     console.error('PDF processing error:', error)
+    
+    // 詳細なエラー情報を提供
+    let errorMessage = 'Failed to process PDF file'
+    if (error instanceof Error) {
+      errorMessage = `PDF処理エラー: ${error.message}`
+    } else if (typeof error === 'string') {
+      errorMessage = `PDF処理エラー: ${error}`
+    } else {
+      errorMessage = 'PDF処理中に予期しないエラーが発生しました'
+    }
+    
     return NextResponse.json(
-      { error: 'Failed to process PDF file' }, 
+      { error: errorMessage, details: error instanceof Error ? error.stack : String(error) }, 
       { status: 500 }
     )
   }
