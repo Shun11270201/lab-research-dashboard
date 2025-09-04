@@ -39,7 +39,7 @@ export default function ChatBotInterface() {
     {
       id: '1',
       role: 'assistant',
-      content: 'こんにちは！中西研究室のRAG ChatBotです。過去の卒論・修論や論文資料について質問してください。どのようなことをお手伝いできますか？',
+      content: 'こんにちは！中西研究室のRAG ChatBotです。\n\n📚 **既に読み込み済みの研究資料：**\n・深層学習・画像認識に関する研究\n・自然言語処理・Transformerに関する研究\n・説明可能AI・医療診断に関する研究\n・強化学習・自動運転に関する研究\n・IoT・エッジコンピューティングに関する研究\n・ブロックチェーン技術応用に関する研究\n・連合学習・Graph Neural Networkに関する研究\n\n📖 これらの研究内容について、お気軽に質問してください！具体的な手法や実験結果、関連技術について詳しく説明いたします。',
       timestamp: new Date(),
     }
   ])
