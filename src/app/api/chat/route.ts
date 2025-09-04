@@ -1,10 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 
-// OpenAI クライアントの初期化
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const runtime = 'nodejs'
+// 実行時にだけ生成（ビルド時に評価されない）
+let _openai: OpenAI | null = null
+function getOpenAI() {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!_openai) {
+    if (!apiKey) throw new Error('Missing OPENAI_API_KEY')
+    _openai = new OpenAI({ apiKey })
+  }
+  return _openai
+}
+// 利用箇所：openai.◯◯ → getOpenAI().◯◯ に置換
+// 例：getOpenAI().chat.completions.create({ ... })
 
 // 簡易的な知識ベース（実際の実装ではベクトルDBを使用）
 interface KnowledgeDocument {
@@ -84,7 +95,7 @@ ${context}
 参考にした資料がある場合は、回答の最後にその旨を記載してください。`
 
     // OpenAI APIを呼び出し
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAI().chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
@@ -160,7 +171,7 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic'): 
 
 async function generateEmbedding(text: string): Promise<number[]> {
   try {
-    const response = await openai.embeddings.create({
+    const response = await getOpenAI().embeddings.create({
       model: 'text-embedding-3-small',
       input: text.substring(0, 8000) // トークン制限を考慮
     })

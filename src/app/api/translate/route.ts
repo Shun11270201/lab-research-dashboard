@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 
-// OpenAI クライアントの初期化
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const runtime = 'nodejs'
+
+// 実行時にだけ生成（ビルド時に評価されない）
+let _openai: OpenAI | null = null
+function getOpenAI() {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!_openai) {
+    if (!apiKey) throw new Error('Missing OPENAI_API_KEY')
+    _openai = new OpenAI({ apiKey })
+  }
+  return _openai
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -33,7 +43,7 @@ export async function POST(req: NextRequest) {
       const chunk = chunks[i]
       
       try {
-        const translationResponse = await openai.chat.completions.create({
+        const translationResponse = await getOpenAI().chat.completions.create({
           model: settings.model || 'gpt-4o',
           messages: [
             {
@@ -71,7 +81,7 @@ export async function POST(req: NextRequest) {
         const intermediateSummaries: string[] = []
         
         for (const chunk of summaryChunks) {
-          const summaryResponse = await openai.chat.completions.create({
+          const summaryResponse = await getOpenAI().chat.completions.create({
             model: settings.model || 'gpt-4o',
             messages: [
               {
@@ -93,7 +103,7 @@ export async function POST(req: NextRequest) {
 
         // 最終要約
         const combinedSummary = intermediateSummaries.join('\n\n')
-        const finalSummaryResponse = await openai.chat.completions.create({
+        const finalSummaryResponse = await getOpenAI().chat.completions.create({
           model: settings.model || 'gpt-4o',
           messages: [
             {
