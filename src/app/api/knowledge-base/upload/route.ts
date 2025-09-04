@@ -115,7 +115,3 @@ function preprocessText(text: string): string {
     .substring(0, 50000) // 制限を設ける
 }
 
-// ドキュメント取得API用のエクスポート
-export function getDocuments() {
-  return documents
-}
