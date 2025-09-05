@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 関連する知識を検索（より多くの文書を取得）
-    const relevantKnowledge = await searchKnowledge(message, searchMode)
+    const relevantKnowledge = await searchKnowledge(message, searchMode, req)
     
     // 詳細デバッグ：検索結果の内容を詳しく確認
     console.log('=== 検索結果の詳細デバッグ ===')
@@ -101,28 +101,30 @@ export async function POST(req: NextRequest) {
     })) || []
 
     // システムプロンプト
-    const systemPrompt = `あなたは中西研究室の人間工学専門AIアシスタントです。以下の実際の研究データベースに基づいて、具体的で正確な回答を提供してください。
+    const systemPrompt = `あなたは中西研究室の人間工学専門AIアシスタントです。以下の実際の研究データベースに基づいて回答してください。
 
-【重要】以下の研究情報が利用可能です：
+【最重要】以下の研究情報を必ず使用して回答してください：
 ${context}
 
-【回答の原則】
-1. **具体性を重視**：上記の研究データベースから具体的な研究内容、実験手法、結果を引用する
-2. **研究者の特定**：特定の研究者について質問された場合、その人の実際の研究を正確に紹介する
-3. **実験詳細の提示**：被験者数、実験条件、測定指標、統計的有意性を可能な限り具体的に示す
-4. **手法の詳細**：使用された技術（Eye-tracking、fNIRS、HMD、VASなど）の詳細を説明する
-5. **実用的価値**：研究から得られた設計指針や応用例を具体的に提示する
+【絶対的指示】
+1. **上記のデータベース内容を必ず使用**：上記のデータは実際の中西研究室の修士論文データです
+2. **研究者質問への対応**：特定の研究者について聞かれた場合、上記データベースから該当する研究を探して詳細に説明してください
+3. **データが見つからない場合**：研究者名が上記データベースにない場合のみ「データベース内に該当する研究が見つかりません」と回答
+4. **具体的内容の提示**：研究内容、手法、結果を上記データベースから正確に引用
 
-【回答形式】
-- 質問された研究者が上記データベースにある場合：その人の実際の研究内容を詳細に説明
-- 一般的な質問の場合：関連する実際の研究事例を複数引用して包括的に回答
-- 不明な場合：「データベース内の関連研究から判断すると...」として推測ではなく事実に基づいて回答
+【回答必須要素】
+- 研究者名と研究タイトル
+- 研究の具体的内容（手法、結果、技術など）
+- 参考研究の明記
 
-【出典の明記】
-参考にした研究がある場合は、必ず最後に以下の形式で明記：
-- 参考研究：[著者名]「[論文タイトル]」([年度])
+【例】小野さんについて質問された場合：
+上記データベースに小野さんの研究がある場合は、その研究内容（研究テーマ、手法、結果など）を詳細に説明してください。
 
-一般的な情報ではなく、必ず上記の具体的な研究データに基づいて回答してください。`
+【出典明記（必須）】
+回答に使用した研究は以下の形式で必ず明記：
+参考研究：[著者名]「[論文タイトル]」([年度])
+
+上記データベースの情報のみを使用し、推測や一般知識は使用しないでください。`
 
     // OpenAI APIを呼び出し
     const response = await getOpenAI().chat.completions.create({
@@ -159,41 +161,30 @@ ${context}
   }
 }
 
-async function loadThesisData(): Promise<KnowledgeDocument[]> {
-  // キャッシュチェック（デバッグ用に無効化）
+async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
+  // キャッシュチェック
   const now = Date.now()
-  if (false && _thesisCache && (now - _cacheTimestamp) < CACHE_DURATION) {
+  if (_thesisCache && (now - _cacheTimestamp) < CACHE_DURATION) {
     console.log('Using cached thesis data')
     return _thesisCache
   }
 
   try {
     console.log('Loading fresh thesis data...')
-    const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/load-thesis`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    })
     
-    if (!response.ok) {
-      console.error('Failed to load thesis data:', response.statusText)
-      return _thesisCache || []
-    }
+    // Use static knowledge base in all cases to avoid circular API calls
+    const { knowledgeBase } = await import('../../../data/knowledgeBase')
     
-    const data = await response.json()
-    
-    // Convert thesis documents to knowledge base format
-    const thesisData = data.documents?.map((doc: any) => ({
+    const thesisData = knowledgeBase.map(doc => ({
       id: doc.id,
       content: doc.content,
       metadata: {
-        title: doc.title,
-        type: 'thesis' as const,
-        author: doc.author,
-        year: doc.year
+        title: doc.metadata.title,
+        type: doc.metadata.type,
+        author: doc.metadata.author,
+        year: doc.metadata.year
       }
-    })) || []
+    }))
     
     // キャッシュを更新
     _thesisCache = thesisData
@@ -223,9 +214,9 @@ async function loadThesisData(): Promise<KnowledgeDocument[]> {
   }
 }
 
-async function searchKnowledge(query: string, searchMode: string = 'semantic'): Promise<KnowledgeDocument[]> {
+async function searchKnowledge(query: string, searchMode: string = 'semantic', req?: NextRequest): Promise<KnowledgeDocument[]> {
   // Load actual thesis documents
-  const knowledgeBase = await loadThesisData()
+  const knowledgeBase = await loadThesisData(req)
   
   console.log('=== 検索開始 ===')
   console.log(`クエリ: "${query}"`)
@@ -355,12 +346,12 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic'): 
       } else {
         // 候補が少ない場合は全文書を対象にキーワード検索
         console.log('No specific candidates found, falling back to broad keyword search')
-        return searchKnowledge(query, 'keyword')
+        return searchKnowledge(query, 'keyword', req)
       }
         
     } catch (error) {
       console.error('Semantic search error:', error)
-      return searchKnowledge(query, 'keyword')
+      return searchKnowledge(query, 'keyword', req)
     }
   }
 }
