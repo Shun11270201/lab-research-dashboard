@@ -50,6 +50,7 @@ export default function ChatBotInterface() {
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase[]>([])
   const [showSettings, setShowSettings] = useState(false)
   const [searchMode, setSearchMode] = useState<'semantic' | 'keyword'>('semantic')
+  const [sendOnEnter, setSendOnEnter] = useState(false) // デフォルトはEnterで改行
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -280,6 +281,19 @@ export default function ChatBotInterface() {
                   <span className="text-sm">キーワード検索（高速）</span>
                 </label>
               </div>
+
+              <div className="mt-4 flex items-center gap-3">
+                <input
+                  id="sendOnEnter"
+                  type="checkbox"
+                  checked={sendOnEnter}
+                  onChange={(e) => setSendOnEnter(e.target.checked)}
+                  className="accent-green-500"
+                />
+                <label htmlFor="sendOnEnter" className="text-sm text-gray-300">
+                  Enterで送信（ONの場合、改行は Shift+Enter）
+                </label>
+              </div>
             </div>
           )}
 
@@ -364,8 +378,7 @@ export default function ChatBotInterface() {
           <div className="p-6 border-t border-white/10">
             <div className="flex gap-3">
               <div className="flex-1 relative">
-                <input
-                  type="text"
+                <textarea
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
                   onCompositionStart={() => setIsComposing(true)}
@@ -373,13 +386,20 @@ export default function ChatBotInterface() {
                   onKeyDown={(e) => {
                     const ne = e.nativeEvent as unknown as { isComposing?: boolean; keyCode?: number }
                     const composing = isComposing || ne?.isComposing || ne?.keyCode === 229
-                    if (e.key === 'Enter' && !e.shiftKey && !composing) {
-                      e.preventDefault()
-                      handleSendMessage()
+                    const isEnter = e.key === 'Enter'
+                    if (composing) return // 変換中は常に無視
+                    // 送信条件: sendOnEnter=ON かつ Enter（Shiftなし） / sendOnEnter=OFF かつ Ctrl(⌘)+Enter
+                    if (isEnter) {
+                      const wantsSend = (sendOnEnter && !e.shiftKey) || (!sendOnEnter && (e.ctrlKey || e.metaKey))
+                      if (wantsSend) {
+                        e.preventDefault()
+                        handleSendMessage()
+                      }
                     }
                   }}
-                  placeholder="研究に関する質問を入力してください..."
-                  className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded-lg focus:border-green-500 outline-none pr-12"
+                  placeholder={sendOnEnter ? 'Enterで送信 / 改行は Shift+Enter' : 'Enterで改行 / 送信は Ctrl(⌘)+Enter'}
+                  rows={3}
+                  className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded-lg focus:border-green-500 outline-none pr-12 resize-y"
                 />
                 <button
                   onClick={() => fileInputRef.current?.click()}
