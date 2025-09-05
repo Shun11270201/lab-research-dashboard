@@ -77,10 +77,15 @@ export async function POST(req: NextRequest) {
     })
     
     // コンテキストを構築（より詳細な情報を含める）
-    const context = relevantKnowledge.map(doc => {
+    // 上限: 上位3件・各4,000文字までに制限してトークン超過を防止
+    const MAX_DOCS = 3
+    const MAX_CHARS_PER_DOC = 4000
+    const limitedDocs = relevantKnowledge.slice(0, MAX_DOCS)
+    const context = limitedDocs.map(doc => {
       const authorInfo = doc.metadata.author ? `（著者：${doc.metadata.author}）` : ''
       const yearInfo = doc.metadata.year ? `（${doc.metadata.year}年度）` : ''
-      return `【${doc.metadata.title}】${authorInfo}${yearInfo}\n${doc.content}`
+      const body = (doc.content || '').substring(0, MAX_CHARS_PER_DOC)
+      return `【${doc.metadata.title}】${authorInfo}${yearInfo}\n${body}`
     }).join('\n\n---\n\n')
     
     console.log(`コンテキスト長: ${context.length}`)
