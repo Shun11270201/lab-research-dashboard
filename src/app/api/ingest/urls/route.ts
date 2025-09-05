@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
             author,
           }
           await Promise.all([
-            kv.hset(`kb:doc:${doc.id}`, kvdoc),
+            kv.hset(`kb:doc:${doc.id}`, kvdoc as unknown as Record<string, unknown>),
             kv.zadd('kb:docs', { score: Date.now(), member: doc.id })
           ])
         } catch (e) {

@@ -51,7 +51,7 @@ export async function GET() {
       if (Array.isArray(legacy) && legacy.length > 0) {
         const pipe = kv.pipeline()
         for (const d of legacy) {
-          pipe.hset(KEY_DOC(d.id), d)
+          pipe.hset(KEY_DOC(d.id), d as unknown as Record<string, unknown>)
           const score = Number.isFinite(Date.parse(d.uploadedAt)) ? Date.parse(d.uploadedAt) : Date.now()
           pipe.zadd(KEY_INDEX, { score, member: d.id })
         }

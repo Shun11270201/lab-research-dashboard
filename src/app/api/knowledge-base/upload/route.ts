@@ -87,7 +87,7 @@ async function processDocument(documentId: string, file: File) {
         author: inferredAuthor,
       }
       await Promise.all([
-        kv.hset(`kb:doc:${documentId}`, doc),
+        kv.hset(`kb:doc:${documentId}`, doc as unknown as Record<string, unknown>),
         kv.zadd('kb:docs', { score: Date.now(), member: documentId })
       ])
     } catch (e) {
