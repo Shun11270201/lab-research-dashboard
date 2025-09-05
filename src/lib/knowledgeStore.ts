@@ -61,7 +61,8 @@ export async function getDocumentsAsync(): Promise<StoredDocument[]> {
   if (hasKV()) {
     try {
       const kv = await getKV()
-      const list = (await kv?.get<StoredDocument[]>('lab:docs')) || []
+      const raw = kv ? await kv.get('lab:docs') : null
+      const list = (raw || []) as unknown as StoredDocument[]
       return Array.isArray(list) ? list : []
     } catch (e) {
       console.warn('KV get failed, falling back to memory:', e)
