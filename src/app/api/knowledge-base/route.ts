@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { kv } from '@vercel/kv'
+import { readMetadata } from '../../../lib/blobStore'
 import { getDocumentsAsync } from '../../../lib/knowledgeStore'
 
 export const dynamic = 'force-dynamic'
@@ -26,7 +27,23 @@ const kvEnabled = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKE
 
 export async function GET() {
   try {
-    // Try KV zset + hash layout first
+    // Try Blob metadata first
+    try {
+      const meta = await readMetadata()
+      if (meta && meta.documents.length > 0) {
+        return NextResponse.json({
+          documents: meta.documents.map(d => ({
+            id: d.id,
+            name: d.name,
+            type: d.type,
+            uploadedAt: d.uploadedAt,
+            status: d.status,
+          }))
+        })
+      }
+    } catch {}
+
+    // Try KV zset + hash layout next (if configured)
     try {
       if (!kvEnabled) throw new Error('KV disabled')
       const ids = (await kv.zrange(KEY_INDEX, 0, -1, { rev: true })) as unknown as string[]

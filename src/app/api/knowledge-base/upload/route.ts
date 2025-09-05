@@ -4,6 +4,7 @@ import { upsertDocumentByNameAsync, updateDocumentAsync } from '../../../../lib/
 import OpenAI from 'openai'
 import { storeDocVectors } from '../../../../lib/vectorStore'
 import { kv } from '@vercel/kv'
+import { upsertDocument as upsertBlobDocument } from '../../../../lib/blobStore'
 const kvEnabled = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN)
 import { preprocessText, inferAuthor } from '../../../../lib/textUtil'
 
@@ -94,6 +95,21 @@ async function processDocument(documentId: string, file: File, docType: 'thesis'
       ])
     } catch (e) {
       console.warn('KV persist (upload) failed:', e)
+    }
+
+    // Persist into Blob metadata (optional, works without KV)
+    try {
+      await upsertBlobDocument({
+        id: documentId,
+        name: file.name,
+        type: docType,
+        uploadedAt,
+        status: 'ready',
+        content,
+        author: inferredAuthor,
+      })
+    } catch (e) {
+      console.warn('Blob metadata persist (upload) failed:', e)
     }
 
   } catch (error) {
