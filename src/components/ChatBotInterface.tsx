@@ -91,7 +91,10 @@ export default function ChatBotInterface() {
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json; charset=utf-8',
+          'Accept': 'application/json; charset=utf-8'
+        },
         body: JSON.stringify({
           message: inputMessage,
           searchMode,

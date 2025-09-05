@@ -37,7 +37,9 @@ interface KnowledgeDocument {
 
 export async function POST(req: NextRequest) {
   try {
-    const { message, searchMode, history } = await req.json()
+    // Ensure proper text decoding for Japanese characters
+    const body = await req.text()
+    const { message, searchMode, history } = JSON.parse(body)
     
     if (!message) {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 })
@@ -51,6 +53,23 @@ export async function POST(req: NextRequest) {
     // 関連する知識を検索（より多くの文書を取得）
     const relevantKnowledge = await searchKnowledge(message, searchMode)
     
+    // 詳細デバッグ：検索結果の内容を詳しく確認
+    console.log('=== 検索結果の詳細デバッグ ===')
+    console.log(`クエリ: "${message}"`)
+    console.log(`検索モード: ${searchMode}`)
+    console.log(`見つかった文書数: ${relevantKnowledge.length}`)
+    
+    relevantKnowledge.forEach((doc, index) => {
+      console.log(`文書${index + 1}:`)
+      console.log(`  ID: ${doc.id}`)
+      console.log(`  タイトル: ${doc.metadata.title}`)
+      console.log(`  著者: ${doc.metadata.author || '未設定'}`)
+      console.log(`  年度: ${doc.metadata.year || '未設定'}`)
+      console.log(`  コンテンツ長: ${doc.content.length}`)
+      console.log(`  コンテンツ先頭100文字: "${doc.content.substring(0, 100)}"`)
+      console.log('---')
+    })
+    
     // コンテキストを構築（より詳細な情報を含める）
     const context = relevantKnowledge.map(doc => {
       const authorInfo = doc.metadata.author ? `（著者：${doc.metadata.author}）` : ''
@@ -58,7 +77,22 @@ export async function POST(req: NextRequest) {
       return `【${doc.metadata.title}】${authorInfo}${yearInfo}\n${doc.content}`
     }).join('\n\n---\n\n')
     
+    console.log(`コンテキスト長: ${context.length}`)
+    console.log(`コンテキスト先頭500文字: "${context.substring(0, 500)}"`)
+    console.log('========================')
+    
     console.log(`Found ${relevantKnowledge.length} relevant documents for query: "${message}"`)
+    
+    // 小野さんに関するクエリの場合、詳細デバッグ
+    if (message.toLowerCase().includes('小野')) {
+      console.log('=== 小野さんクエリのデバッグ ===')
+      console.log('検索モード:', searchMode)
+      console.log('関連文書数:', relevantKnowledge.length)
+      relevantKnowledge.forEach((doc, index) => {
+        console.log(`文書${index + 1}:`, doc.metadata.title, 'by', doc.metadata.author)
+      })
+      console.log('========================')
+    }
 
     // 会話履歴を構築
     const conversationHistory = history?.slice(-6).map((msg: any) => ({
@@ -110,6 +144,10 @@ ${context}
     return NextResponse.json({
       response: aiResponse,
       sources: sources.length > 0 ? sources : null
+    }, {
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8'
+      }
     })
 
   } catch (error) {
@@ -122,9 +160,9 @@ ${context}
 }
 
 async function loadThesisData(): Promise<KnowledgeDocument[]> {
-  // キャッシュチェック
+  // キャッシュチェック（デバッグ用に無効化）
   const now = Date.now()
-  if (_thesisCache && (now - _cacheTimestamp) < CACHE_DURATION) {
+  if (false && _thesisCache && (now - _cacheTimestamp) < CACHE_DURATION) {
     console.log('Using cached thesis data')
     return _thesisCache
   }
@@ -162,6 +200,22 @@ async function loadThesisData(): Promise<KnowledgeDocument[]> {
     _cacheTimestamp = now
     console.log(`Cached ${thesisData.length} thesis documents`)
     
+    // データの詳細を確認（デバッグ用）
+    console.log('=== ロードされた論文データの詳細 ===')
+    thesisData.forEach((doc, index) => {
+      if (doc.metadata.author && doc.metadata.author.includes('小野')) {
+        console.log(`小野さんの論文発見 [${index}]:`)
+        console.log(`  ID: ${doc.id}`)
+        console.log(`  著者: ${doc.metadata.author}`)
+        console.log(`  タイトル: ${doc.metadata.title}`)
+        console.log(`  コンテンツ長: ${doc.content.length}`)
+        console.log(`  コンテンツ先頭200文字: "${doc.content.substring(0, 200)}"`)
+        console.log('---')
+      }
+    })
+    console.log(`小野さんの論文数: ${thesisData.filter(doc => doc.metadata.author?.includes('小野')).length}`)
+    console.log('===============================')
+    
     return thesisData
   } catch (error) {
     console.error('Error loading thesis data:', error)
@@ -173,33 +227,69 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic'): 
   // Load actual thesis documents
   const knowledgeBase = await loadThesisData()
   
+  console.log('=== 検索開始 ===')
+  console.log(`クエリ: "${query}"`)
+  console.log(`検索モード: ${searchMode}`)
+  console.log(`利用可能な文書数: ${knowledgeBase.length}`)
+  
   if (knowledgeBase.length === 0) {
     console.warn('No thesis data loaded for search')
     return []
   }
   
+  // 小野さん関連のクエリの場合、利用可能な文書をチェック
+  if (query.toLowerCase().includes('小野')) {
+    const onoDocuments = knowledgeBase.filter(doc => 
+      doc.metadata.author?.includes('小野') || 
+      doc.content.toLowerCase().includes('小野') ||
+      doc.metadata.title.toLowerCase().includes('小野')
+    )
+    console.log(`小野さん関連の利用可能文書数: ${onoDocuments.length}`)
+    onoDocuments.forEach((doc, index) => {
+      console.log(`  文書${index + 1}: ${doc.metadata.title} (著者: ${doc.metadata.author})`)
+    })
+  }
+  
   if (searchMode === 'keyword') {
     // キーワード検索
+    console.log('=== キーワード検索実行中 ===')
     const keywords = query.toLowerCase().split(/\s+/)
-    return knowledgeBase.filter(doc => 
+    console.log(`キーワード: [${keywords.join(', ')}]`)
+    
+    const results = knowledgeBase.filter(doc => 
       keywords.some(keyword => {
         const lowerContent = doc.content.toLowerCase()
         const lowerTitle = doc.metadata.title.toLowerCase()
         const lowerAuthor = doc.metadata.author?.toLowerCase()
         
         // 通常の部分マッチ
-        if (lowerContent.includes(keyword) || lowerTitle.includes(keyword)) {
-          return true
-        }
+        const contentMatch = lowerContent.includes(keyword)
+        const titleMatch = lowerTitle.includes(keyword)
+        let authorMatch = false
         
         // 作者名での双方向マッチング（「小野真子」→「小野」、「小野」→「小野真子」）
         if (lowerAuthor) {
-          return lowerAuthor.includes(keyword) || keyword.includes(lowerAuthor)
+          authorMatch = lowerAuthor.includes(keyword) || keyword.includes(lowerAuthor)
         }
         
-        return false
+        const hasMatch = contentMatch || titleMatch || authorMatch
+        
+        // デバッグ出力（小野さんの場合のみ）
+        if (keyword.includes('小野') && hasMatch) {
+          console.log(`マッチした文書: ${doc.metadata.title}`)
+          console.log(`  著者: ${doc.metadata.author}`)
+          console.log(`  contentMatch: ${contentMatch}`)
+          console.log(`  titleMatch: ${titleMatch}`)
+          console.log(`  authorMatch: ${authorMatch}`)
+        }
+        
+        return hasMatch
       })
     )
+    
+    console.log(`キーワード検索結果: ${results.length}件`)
+    console.log('========================')
+    return results
   } else {
     // セマンティック検索（改良版：まず関連文書を絞り込み、その後セマンティック検索）
     try {

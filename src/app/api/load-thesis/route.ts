@@ -69,9 +69,33 @@ export async function POST() {
         // パターン1: アンダースコア区切りで日本語名がある場合
         if (file.includes('_')) {
           const parts = file.split('_')
-          author = parts.find(part => 
-            /^[ぁ-ゖァ-ヺ一-龯]{2,10}$/.test(part.replace('.pdf', ''))
-          ) || ''
+          console.log(`Debug ${file}: parts =`, parts)
+          
+          // まず除外単語を定義
+          const excludeWords = ['修士論文', '修論', '修論本文', 'final', 'v', '完成版', '最終提出版', '最終']
+          
+          // 候補を全て収集してから、最も適切なものを選択
+          const candidates = parts
+            .map(part => {
+              const cleanPart = part.replace(/[\(\)（）\d\s]+/g, '').replace('.pdf', '')
+              const isJapaneseName = /^[ぁ-ゖァ-ヺ一-龯]{2,10}$/.test(cleanPart)
+              const isExcludedWord = excludeWords.some(word => cleanPart.includes(word) || cleanPart === word)
+              
+              console.log(`  Testing part: "${part}" -> clean: "${cleanPart}" -> isJapaneseName: ${isJapaneseName} -> excluded: ${isExcludedWord}`)
+              
+              if (isJapaneseName && !isExcludedWord) {
+                return { original: part, clean: cleanPart, score: cleanPart.length }
+              }
+              return null
+            })
+            .filter(Boolean)
+          
+          // 最も長い名前を選択（より具体的な名前を優先）
+          if (candidates.length > 0) {
+            const best = candidates.sort((a, b) => b.score - a.score)[0]
+            author = best.clean
+            console.log(`  Author found: "${best.original}" -> cleaned: "${author}" (score: ${best.score})`)
+          }
         }
         
         // パターン2: 括弧内の日本語名
@@ -101,6 +125,16 @@ export async function POST() {
           content: content,
           author: author || undefined,
           year: 2020 + (i % 4) // 仮の年度
+        }
+        
+        // デバッグ情報を出力（小野さんの場合）
+        if (file.toLowerCase().includes('小野') || (author && author.includes('小野'))) {
+          console.log('=== 小野さんのデータ処理 ===')
+          console.log('ファイル名:', file)
+          console.log('抽出された作者:', author)
+          console.log('コンテンツ長:', content.length)
+          console.log('コンテンツ先頭100文字:', content.substring(0, 100))
+          console.log('==================')
         }
         
         thesisDocuments.push(thesisDoc)
