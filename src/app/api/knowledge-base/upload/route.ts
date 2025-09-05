@@ -19,13 +19,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 })
     }
 
-    const documentType: 'thesis' | 'paper' | 'document' = 
+    const docType: 'thesis' | 'paper' | 'document' = 
       file.name.includes('卒論') || file.name.includes('修論') ? 'thesis' :
       file.name.includes('.pdf') ? 'paper' : 'document'
 
-    const newDocument = await upsertDocumentByNameAsync(file.name, documentType)
+    const newDocument = await upsertDocumentByNameAsync(file.name, docType)
 
-    await processDocument(newDocument.id, file)
+    await processDocument(newDocument.id, file, docType)
 
     return NextResponse.json({ 
       message: 'Upload completed',
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-async function processDocument(documentId: string, file: File) {
+async function processDocument(documentId: string, file: File, docType: 'thesis' | 'paper' | 'document') {
   try {
     // 存在チェックは更新時に反映される
 
@@ -80,7 +80,7 @@ async function processDocument(documentId: string, file: File) {
       const doc = {
         id: documentId,
         name: file.name,
-        type: documentType,
+        type: docType,
         uploadedAt,
         status: 'ready' as const,
         content,
