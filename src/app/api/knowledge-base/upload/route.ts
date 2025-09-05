@@ -63,6 +63,7 @@ async function processDocument(documentId: string, file: File, docType: 'thesis'
     
     // Infer author from filename/content
     const inferredAuthor = inferAuthor(file.name, content)
+    const uploadedAt = new Date().toISOString()
 
     await updateDocumentAsync(documentId, { content, status: 'ready', author: inferredAuthor })
 
@@ -79,7 +80,6 @@ async function processDocument(documentId: string, file: File, docType: 'thesis'
     // Persist into KV (zset + hash) for listing
     try {
       if (!kvEnabled) throw new Error('KV disabled')
-      const uploadedAt = new Date().toISOString()
       const doc = {
         id: documentId,
         name: file.name,
