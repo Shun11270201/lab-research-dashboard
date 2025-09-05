@@ -3,6 +3,7 @@ import pdf from 'pdf-parse'
 import { upsertDocumentByNameAsync, updateDocumentAsync } from '../../../../lib/knowledgeStore'
 import OpenAI from 'openai'
 import { storeDocVectors } from '../../../../lib/vectorStore'
+import { kv } from '@vercel/kv'
 import { preprocessText, inferAuthor } from '../../../../lib/textUtil'
 
 export const dynamic = 'force-dynamic'
@@ -71,6 +72,26 @@ async function processDocument(documentId: string, file: File) {
       }
     } catch (e) {
       console.warn('Vectorization failed, continuing without vectors:', e)
+    }
+
+    // Persist into KV (zset + hash) for listing
+    try {
+      const uploadedAt = new Date().toISOString()
+      const doc = {
+        id: documentId,
+        name: file.name,
+        type: documentType,
+        uploadedAt,
+        status: 'ready' as const,
+        content,
+        author: inferredAuthor,
+      }
+      await Promise.all([
+        kv.hset(`kb:doc:${documentId}`, doc),
+        kv.zadd('kb:docs', { score: Date.now(), member: documentId })
+      ])
+    } catch (e) {
+      console.warn('KV persist (upload) failed:', e)
     }
 
   } catch (error) {

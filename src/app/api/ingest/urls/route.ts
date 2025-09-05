@@ -4,6 +4,7 @@ import OpenAI from 'openai'
 import { upsertDocumentByNameAsync, updateDocumentAsync } from '../../../../lib/knowledgeStore'
 import { preprocessText, inferAuthor } from '../../../../lib/textUtil'
 import { storeDocVectors } from '../../../../lib/vectorStore'
+import { kv } from '@vercel/kv'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -53,6 +54,26 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // Persist into KV (zset + hash) for listing
+        try {
+          const uploadedAt = new Date().toISOString()
+          const kvdoc = {
+            id: doc.id,
+            name,
+            type: 'thesis' as const,
+            uploadedAt,
+            status: 'ready' as const,
+            content: text,
+            author,
+          }
+          await Promise.all([
+            kv.hset(`kb:doc:${doc.id}`, kvdoc),
+            kv.zadd('kb:docs', { score: Date.now(), member: doc.id })
+          ])
+        } catch (e) {
+          // KV persist error is non-fatal
+        }
+
         results.push({ url, ok: true })
         ingested += 1
       } catch (e: any) {
@@ -67,4 +88,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(error) }, { status: 500 })
   }
 }
-

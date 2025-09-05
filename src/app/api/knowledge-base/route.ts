@@ -1,18 +1,81 @@
 import { NextResponse } from 'next/server'
+import { kv } from '@vercel/kv'
 import { getDocumentsAsync } from '../../../lib/knowledgeStore'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const runtime = 'nodejs'
+
+type DocType = 'thesis' | 'paper' | 'document'
+interface StoredDocument {
+  id: string
+  name: string
+  type: DocType
+  uploadedAt: string
+  status: 'processing' | 'ready' | 'error'
+  content?: string
+  author?: string
+}
+
+const KEY_INDEX = 'kb:docs'
+const KEY_DOC = (id: string) => `kb:doc:${id}`
 
 // 簡易的な知識ベースストレージ（実際の実装ではデータベースを使用）
 // 共有ドキュメントストアを使用
 
 export async function GET() {
   try {
+    // Try KV zset + hash layout first
+    try {
+      const ids = await kv.zrange<string>(KEY_INDEX, 0, -1, { rev: true })
+      if (ids && ids.length > 0) {
+        const pipeline = kv.pipeline()
+        ids.forEach(id => pipeline.hgetall<StoredDocument>(KEY_DOC(id)))
+        const docs = (await pipeline.exec()).filter(Boolean) as StoredDocument[]
+        return NextResponse.json({
+          documents: docs.map(d => ({
+            id: d.id,
+            name: d.name,
+            type: d.type,
+            uploadedAt: d.uploadedAt,
+            status: d.status,
+          }))
+        })
+      }
+    } catch {}
+
+    // Seed from legacy list key if present (lab:docs)
+    try {
+      const legacy = await kv.get<StoredDocument[]>('lab:docs')
+      if (Array.isArray(legacy) && legacy.length > 0) {
+        const pipe = kv.pipeline()
+        for (const d of legacy) {
+          pipe.hset(KEY_DOC(d.id), d)
+          const score = Number.isFinite(Date.parse(d.uploadedAt)) ? Date.parse(d.uploadedAt) : Date.now()
+          pipe.zadd(KEY_INDEX, { score, member: d.id })
+        }
+        await pipe.exec()
+        return NextResponse.json({
+          documents: legacy.map(d => ({
+            id: d.id,
+            name: d.name,
+            type: d.type,
+            uploadedAt: d.uploadedAt,
+            status: d.status,
+          }))
+        })
+      }
+    } catch {}
+
+    // Fallback to in-memory/dev store
+    const fallback = await getDocumentsAsync()
     return NextResponse.json({
-      documents: (await getDocumentsAsync()).map(doc => ({
-        id: doc.id,
-        name: doc.name,
-        type: doc.type,
-        uploadedAt: doc.uploadedAt,
-        status: doc.status
+      documents: fallback.map(d => ({
+        id: d.id,
+        name: d.name,
+        type: d.type,
+        uploadedAt: d.uploadedAt,
+        status: d.status,
       }))
     })
   } catch (error) {
