@@ -98,9 +98,10 @@ export async function POST() {
           // まず除外単語を定義
           const excludeWords = ['修士論文', '修論', '修論本文', 'final', 'v', '完成版', '最終提出版', '最終']
           
-          // 候補を全て収集してから、最も適切なものを選択
+          // 候補を全て収集してから、最も適切なものを選択（型ガードでnullを除外）
+          type Candidate = { original: string; clean: string; score: number }
           const candidates = parts
-            .map(part => {
+            .map<Candidate | null>(part => {
               const cleanPart = part.replace(/[\(\)（）\d\s]+/g, '').replace('.pdf', '')
               const isJapaneseName = /^[ぁ-ゖァ-ヺ一-龯]{2,10}$/.test(cleanPart)
               const isExcludedWord = excludeWords.some(word => cleanPart.includes(word) || cleanPart === word)
@@ -112,7 +113,7 @@ export async function POST() {
               }
               return null
             })
-            .filter(Boolean)
+            .filter((c): c is Candidate => c !== null)
           
           // 最も長い名前を選択（より具体的な名前を優先）
           if (candidates.length > 0) {

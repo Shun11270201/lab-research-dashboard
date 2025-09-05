@@ -1,16 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import pdf from 'pdf-parse'
-
-interface StoredDocument {
-  id: string
-  name: string
-  type: 'thesis' | 'paper' | 'document'
-  uploadedAt: string
-  status: 'processing' | 'ready' | 'error'
-  content?: string
-}
-
-const documents: StoredDocument[] = []
+import { createDocument, updateDocument } from '../../../../lib/knowledgeStore'
 
 export async function POST(req: NextRequest) {
   try {
@@ -25,15 +15,7 @@ export async function POST(req: NextRequest) {
       file.name.includes('卒論') || file.name.includes('修論') ? 'thesis' :
       file.name.includes('.pdf') ? 'paper' : 'document'
 
-    const newDocument: StoredDocument = {
-      id: Date.now().toString(),
-      name: file.name,
-      type: documentType,
-      uploadedAt: new Date().toISOString(),
-      status: 'processing'
-    }
-
-    documents.push(newDocument)
+    const newDocument = createDocument(file.name, documentType)
 
     processDocument(newDocument.id, file)
       .then(() => {
@@ -59,10 +41,7 @@ export async function POST(req: NextRequest) {
 
 async function processDocument(documentId: string, file: File) {
   try {
-    const document = documents.find(doc => doc.id === documentId)
-    if (!document) {
-      throw new Error('Document not found')
-    }
+    // 存在チェックは更新時に反映される
 
     const fileBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(fileBuffer)
@@ -78,16 +57,11 @@ async function processDocument(documentId: string, file: File) {
 
     content = preprocessText(content)
     
-    document.content = content
-    document.status = 'ready'
+    updateDocument(documentId, { content, status: 'ready' })
 
   } catch (error) {
     console.error('Document processing error:', error)
-    
-    const document = documents.find(doc => doc.id === documentId)
-    if (document) {
-      document.status = 'error'
-    }
+    updateDocument(documentId, { status: 'error' })
   }
 }
 
