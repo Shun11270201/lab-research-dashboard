@@ -5,6 +5,7 @@ import { upsertDocumentByNameAsync, updateDocumentAsync } from '../../../../lib/
 import { preprocessText, inferAuthor } from '../../../../lib/textUtil'
 import { storeDocVectors } from '../../../../lib/vectorStore'
 import { kv } from '@vercel/kv'
+const kvEnabled = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN)
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -56,6 +57,7 @@ export async function POST(req: NextRequest) {
 
         // Persist into KV (zset + hash) for listing
         try {
+          if (!kvEnabled) throw new Error('KV disabled')
           const uploadedAt = new Date().toISOString()
           const kvdoc = {
             id: doc.id,

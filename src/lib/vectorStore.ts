@@ -9,6 +9,7 @@ export interface VectorChunk {
 
 const INDEX_KEY = 'lab:vec:index'
 const VEC_KEY = (docId: string) => `lab:vec:${docId}`
+const kvEnabled = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN)
 
 export function chunkText(text: string, maxLen = 1500): string[] {
   const chunks: string[] = []
@@ -23,6 +24,7 @@ export function chunkText(text: string, maxLen = 1500): string[] {
 }
 
 export async function storeDocVectors(docId: string, text: string, openai: OpenAI, opts?: { maxChars?: number }) {
+  if (!kvEnabled) return
   const limited = opts?.maxChars ? text.slice(0, opts.maxChars) : text
   const chunks = chunkText(limited)
   if (chunks.length === 0) {
@@ -49,11 +51,13 @@ export async function storeDocVectors(docId: string, text: string, openai: OpenA
 }
 
 export async function getIndexedDocIds(): Promise<string[]> {
-  return (await kv.get<string[]>(INDEX_KEY)) || []
+  if (!kvEnabled) return []
+  return (await kv.get(INDEX_KEY) as unknown as string[]) || []
 }
 
 export async function getDocVectors(docId: string) {
-  return (await kv.get<VectorChunk[]>(VEC_KEY(docId))) || null
+  if (!kvEnabled) return null
+  return (await kv.get(VEC_KEY(docId)) as unknown as VectorChunk[]) || null
 }
 
 export async function ensureVectorsGradual(
@@ -63,7 +67,8 @@ export async function ensureVectorsGradual(
   maxCharsPerDoc = 8000
 ) {
   try {
-    const index = (await kv.get<string[]>(INDEX_KEY)) || []
+    if (!kvEnabled) return
+    const index = (await kv.get(INDEX_KEY) as unknown as string[]) || []
     const missing = docs.filter(d => !index.includes(d.id))
     const slice = missing.slice(0, perRun)
     for (const d of slice) {
@@ -73,4 +78,3 @@ export async function ensureVectorsGradual(
     console.warn('ensureVectorsGradual skipped:', e)
   }
 }
-

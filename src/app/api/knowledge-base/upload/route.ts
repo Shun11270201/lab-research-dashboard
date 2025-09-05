@@ -4,6 +4,7 @@ import { upsertDocumentByNameAsync, updateDocumentAsync } from '../../../../lib/
 import OpenAI from 'openai'
 import { storeDocVectors } from '../../../../lib/vectorStore'
 import { kv } from '@vercel/kv'
+const kvEnabled = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN)
 import { preprocessText, inferAuthor } from '../../../../lib/textUtil'
 
 export const dynamic = 'force-dynamic'
@@ -76,6 +77,7 @@ async function processDocument(documentId: string, file: File, docType: 'thesis'
 
     // Persist into KV (zset + hash) for listing
     try {
+      if (!kvEnabled) throw new Error('KV disabled')
       const uploadedAt = new Date().toISOString()
       const doc = {
         id: documentId,
