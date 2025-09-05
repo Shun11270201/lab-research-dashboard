@@ -181,10 +181,23 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic'): 
     // キーワード検索
     const keywords = query.toLowerCase().split(/\s+/)
     return knowledgeBase.filter(doc => 
-      keywords.some(keyword => 
-        doc.content.toLowerCase().includes(keyword) ||
-        doc.metadata.title.toLowerCase().includes(keyword)
-      )
+      keywords.some(keyword => {
+        const lowerContent = doc.content.toLowerCase()
+        const lowerTitle = doc.metadata.title.toLowerCase()
+        const lowerAuthor = doc.metadata.author?.toLowerCase()
+        
+        // 通常の部分マッチ
+        if (lowerContent.includes(keyword) || lowerTitle.includes(keyword)) {
+          return true
+        }
+        
+        // 作者名での双方向マッチング（「小野真子」→「小野」、「小野」→「小野真子」）
+        if (lowerAuthor) {
+          return lowerAuthor.includes(keyword) || keyword.includes(lowerAuthor)
+        }
+        
+        return false
+      })
     )
   } else {
     // セマンティック検索（簡易版）
