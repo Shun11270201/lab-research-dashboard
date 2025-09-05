@@ -20,15 +20,39 @@ export async function POST() {
   try {
     const thesisPath = process.env.DEFAULT_THESIS_PATH
     console.log('Environment thesis path:', thesisPath)
+    
+    // In production (Vercel), use fallback knowledge base
+    if (!thesisPath || (typeof process !== 'undefined' && process.env.NODE_ENV === 'production')) {
+      console.log('Using fallback knowledge base for production environment')
+      // Import and use the static knowledge base
+      const { knowledgeBase } = await import('../../../data/knowledgeBase')
+      
+      const thesisDocuments: ThesisDocument[] = knowledgeBase.map(doc => ({
+        id: doc.id,
+        filename: `${doc.metadata.author || 'unknown'}.pdf`,
+        title: doc.metadata.title,
+        content: doc.content,
+        author: doc.metadata.author,
+        year: doc.metadata.year
+      }))
+      
+      console.log(`Using ${thesisDocuments.length} documents from static knowledge base`)
+      return NextResponse.json({
+        success: true,
+        count: thesisDocuments.length,
+        documents: thesisDocuments
+      })
+    }
+    
     console.log('Path exists:', thesisPath ? fs.existsSync(thesisPath) : false)
     
-    if (!thesisPath || !fs.existsSync(thesisPath)) {
+    if (!fs.existsSync(thesisPath)) {
       console.error('Thesis path not found or not accessible:', thesisPath)
       return NextResponse.json({ 
         error: 'Thesis directory not found',
         debug: {
           thesisPath,
-          exists: thesisPath ? fs.existsSync(thesisPath) : false
+          exists: false
         }
       }, { status: 404 })
     }

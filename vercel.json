@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "src/app/api/load-thesis/route.ts": {
+      "maxDuration": 300
+    }
+  },
+  "env": {
+    "DEFAULT_THESIS_PATH": "/tmp/thesis",
+    "NEXTAUTH_URL": ""
+  },
+  "build": {
+    "env": {
+      "DEFAULT_THESIS_PATH": "/tmp/thesis"
+    }
+  }
+}
