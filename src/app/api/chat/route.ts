@@ -244,7 +244,9 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
   if (searchMode === 'keyword') {
     // キーワード検索
     console.log('=== キーワード検索実行中 ===')
-    const keywords = query.toLowerCase().split(/\s+/)
+    const baseKeywords = query.toLowerCase().split(/\s+/).filter(Boolean)
+    const kanjiTokens = (query.match(/[一-龯]{2,3}/g) || [])
+    const keywords = Array.from(new Set([...baseKeywords, ...kanjiTokens]))
     console.log(`キーワード: [${keywords.join(', ')}]`)
     
     const results = knowledgeBase.filter(doc => 
@@ -285,7 +287,9 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
     // セマンティック検索（改良版：まず関連文書を絞り込み、その後セマンティック検索）
     try {
       // Step 1: キーワードベースで候補を絞り込み（高速）
-      const keywords = query.toLowerCase().split(/\s+/)
+      const baseKeywords = query.toLowerCase().split(/\s+/).filter(Boolean)
+      const kanjiTokens = (query.match(/[一-龯]{2,3}/g) || [])
+      const keywords = Array.from(new Set([...baseKeywords, ...kanjiTokens]))
       let candidates = knowledgeBase
       
       // 人名や専門用語での事前フィルタリング

@@ -28,7 +28,7 @@ export default function Dashboard() {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
 
-  const LAB_PASSWORD = 'nakanishi-lab'
+  const LAB_PASSWORD = process.env.NEXT_PUBLIC_LAB_PASSWORD || 'nakanishi-lab'
 
   useEffect(() => {
     const auth = localStorage.getItem('lab-auth')
