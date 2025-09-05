@@ -8,6 +8,7 @@ export interface StoredDocument {
   uploadedAt: string
   status: 'processing' | 'ready' | 'error'
   content?: string
+  author?: string
 }
 
 let documents: StoredDocument[] | null = null
