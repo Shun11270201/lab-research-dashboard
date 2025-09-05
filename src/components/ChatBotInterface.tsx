@@ -45,6 +45,7 @@ export default function ChatBotInterface() {
   ])
   
   const [inputMessage, setInputMessage] = useState('')
+  const [isComposing, setIsComposing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase[]>([])
   const [showSettings, setShowSettings] = useState(false)
@@ -79,6 +80,7 @@ export default function ChatBotInterface() {
   }
 
   const handleSendMessage = async () => {
+    if (loading) return
     if (!inputMessage.trim()) return
 
     const userMessage: Message = {
@@ -97,7 +99,9 @@ export default function ChatBotInterface() {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json; charset=utf-8',
-          'Accept': 'application/json; charset=utf-8'
+          'Accept': 'application/json; charset=utf-8',
+          // 入力直後の反映性を高めるためキャッシュ回避ヘッダを付与
+          'x-no-cache': '1'
         },
         body: JSON.stringify({
           message: inputMessage,
@@ -364,7 +368,16 @@ export default function ChatBotInterface() {
                   type="text"
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
+                  onCompositionStart={() => setIsComposing(true)}
+                  onCompositionEnd={() => setIsComposing(false)}
+                  onKeyDown={(e) => {
+                    const ne = e.nativeEvent as unknown as { isComposing?: boolean; keyCode?: number }
+                    const composing = isComposing || ne?.isComposing || ne?.keyCode === 229
+                    if (e.key === 'Enter' && !e.shiftKey && !composing) {
+                      e.preventDefault()
+                      handleSendMessage()
+                    }
+                  }}
                   placeholder="研究に関する質問を入力してください..."
                   className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded-lg focus:border-green-500 outline-none pr-12"
                 />
