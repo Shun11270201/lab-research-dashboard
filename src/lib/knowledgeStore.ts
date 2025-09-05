@@ -27,6 +27,16 @@ async function getKV() {
   }
 }
 
+const VERSION_KEY = 'lab:docs:version'
+
+async function bumpVersion(kv: any) {
+  try {
+    await kv?.set(VERSION_KEY, Date.now())
+  } catch (e) {
+    // non-fatal
+  }
+}
+
 function loadDefaultDocuments(): StoredDocument[] {
   const defaultPath = process.env.DEFAULT_THESIS_PATH
   if (!defaultPath || !fs.existsSync(defaultPath)) {
@@ -91,6 +101,7 @@ export async function createDocumentAsync(name: string, type: 'thesis' | 'paper'
       const list = await getDocumentsAsync()
       list.push(doc)
       await kv?.set('lab:docs', list)
+      await bumpVersion(kv)
     } catch (e) {
       console.warn('KV create failed:', e)
     }
@@ -112,7 +123,12 @@ export async function updateDocumentAsync(id: string, patch: Partial<StoredDocum
     try {
       const kv = await getKV()
       const list = await getDocumentsAsync()
+      const idx = list.findIndex(d => d.id === id)
+      if (idx >= 0) {
+        list[idx] = { ...list[idx], ...patch }
+      }
       await kv?.set('lab:docs', list)
+      await bumpVersion(kv)
     } catch (e) {
       console.warn('KV update failed:', e)
     }
@@ -132,6 +148,7 @@ export async function upsertDocumentByNameAsync(name: string, type: 'thesis' | '
         list.push({ id: Date.now().toString(), name, type, uploadedAt: now, status: 'processing' })
       }
       await kv?.set('lab:docs', list)
+      await bumpVersion(kv)
       return idx >= 0 ? list[idx] : list[list.length - 1]
     } catch (e) {
       console.warn('KV upsert failed, fallback to memory:', e)

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
+import { kv } from '@vercel/kv'
 import { getDocumentsAsync } from '../../../lib/knowledgeStore'
 import { getIndexedDocIds, getDocVectors, ensureVectorsGradual } from '../../../lib/vectorStore'
+import { readMetadata } from '../../../lib/blobStore'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -20,7 +22,9 @@ function getOpenAI() {
 // 論文データのキャッシュ
 let _thesisCache: KnowledgeDocument[] | null = null
 let _cacheTimestamp: number = 0
-const CACHE_DURATION = 30 * 60 * 1000 // 30分間キャッシュ
+let _cacheKVVersion: number | null = null
+const CACHE_DURATION = 2 * 60 * 1000 // 短縮: 2分キャッシュ
+const VERSION_KEY = 'lab:docs:version'
 // 利用箇所：openai.◯◯ → getOpenAI().◯◯ に置換
 // 例：getOpenAI().chat.completions.create({ ... })
 
@@ -198,10 +202,16 @@ async function buildSourcesWithSnippets(query: string, docs: KnowledgeDocument[]
 async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
   // キャッシュチェック
   const now = Date.now()
-  if (_thesisCache && (now - _cacheTimestamp) < CACHE_DURATION) {
-    console.log('Using cached thesis data')
-    return _thesisCache
-  }
+  const noCache = !!(req?.headers.get('x-no-cache') === '1' || (req?.headers.get('cache-control') || '').toLowerCase().includes('no-cache'))
+  try {
+    const remoteVersion = await kv.get<number>(VERSION_KEY).catch(() => null as any)
+    const cacheValidByTime = (now - _cacheTimestamp) < CACHE_DURATION
+    const cacheValidByVersion = _cacheKVVersion !== null && remoteVersion !== null && remoteVersion === _cacheKVVersion
+    if (!noCache && _thesisCache && cacheValidByTime && cacheValidByVersion) {
+      console.log('Using cached thesis data (valid by version)')
+      return _thesisCache
+    }
+  } catch {}
 
   try {
     console.log('Loading fresh thesis data...')
@@ -220,25 +230,47 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
       }
     }))
 
-    // Merge uploaded docs from store if available and have content
+    // Merge uploaded docs from Blob metadata (優先)
     try {
-      const uploaded = await getDocumentsAsync()
-      uploaded
-        .filter(d => (d.content?.trim()?.length || 0) > 0)
-        .forEach(d => {
+      const meta = await readMetadata()
+      if (meta && Array.isArray(meta.documents)) {
+        meta.documents.forEach(d => {
+          const body = (d.content || '').trim()
           thesisData.push({
             id: d.id,
-            content: d.content as string,
+            content: body.length > 0 ? body : `【メタデータのみ】本文抽出不可のためファイル名を記載: ${d.name}`,
             metadata: { title: d.name, type: d.type, author: d.author, year: undefined }
           })
         })
+      } else {
+        throw new Error('Blob metadata empty')
+      }
     } catch (e) {
-      console.warn('Failed to merge uploaded docs:', e)
+      console.warn('Failed to load blob metadata, falling back to store:', e)
+      try {
+        const uploaded = await getDocumentsAsync()
+        uploaded.forEach(d => {
+          const body = (d.content || '').trim()
+          thesisData.push({
+            id: d.id,
+            content: body.length > 0 ? body : `【メタデータのみ】本文抽出不可のためファイル名を記載: ${d.name}`,
+            metadata: { title: d.name, type: d.type, author: d.author, year: undefined }
+          })
+        })
+      } catch (ee) {
+        console.warn('Fallback store merge failed:', ee)
+      }
     }
     
     // キャッシュを更新
     _thesisCache = thesisData
     _cacheTimestamp = now
+    try {
+      const remoteVersion = await kv.get<number>(VERSION_KEY)
+      _cacheKVVersion = typeof remoteVersion === 'number' ? remoteVersion : now
+    } catch {
+      _cacheKVVersion = now
+    }
     console.log(`Cached ${thesisData.length} thesis documents`)
     
     // データの詳細を確認（デバッグ用）
