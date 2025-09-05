@@ -3,6 +3,7 @@ import pdf from 'pdf-parse'
 import { upsertDocumentByNameAsync, updateDocumentAsync } from '../../../../lib/knowledgeStore'
 import OpenAI from 'openai'
 import { storeDocVectors } from '../../../../lib/vectorStore'
+import { preprocessText, inferAuthor } from '../../../../lib/textUtil'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
