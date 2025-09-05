@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getDocuments } from '../../../lib/knowledgeStore'
+import { getDocumentsAsync } from '../../../lib/knowledgeStore'
 
 // 簡易的な知識ベースストレージ（実際の実装ではデータベースを使用）
 // 共有ドキュメントストアを使用
@@ -7,7 +7,7 @@ import { getDocuments } from '../../../lib/knowledgeStore'
 export async function GET() {
   try {
     return NextResponse.json({
-      documents: getDocuments().map(doc => ({
+      documents: (await getDocumentsAsync()).map(doc => ({
         id: doc.id,
         name: doc.name,
         type: doc.type,

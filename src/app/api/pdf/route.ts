@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import pdf from 'pdf-parse'
-import { IncomingForm } from 'formidable'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const runtime = 'nodejs'
 
 export async function POST(req: NextRequest) {
   try {

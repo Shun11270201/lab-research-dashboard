@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import pdf from 'pdf-parse'
-import { createDocument, updateDocument } from '../../../../lib/knowledgeStore'
+import { upsertDocumentByNameAsync, updateDocumentAsync } from '../../../../lib/knowledgeStore'
+import OpenAI from 'openai'
+import { storeDocVectors } from '../../../../lib/vectorStore'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const runtime = 'nodejs'
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,18 +21,12 @@ export async function POST(req: NextRequest) {
       file.name.includes('卒論') || file.name.includes('修論') ? 'thesis' :
       file.name.includes('.pdf') ? 'paper' : 'document'
 
-    const newDocument = createDocument(file.name, documentType)
+    const newDocument = await upsertDocumentByNameAsync(file.name, documentType)
 
-    processDocument(newDocument.id, file)
-      .then(() => {
-        console.log(`Document ${newDocument.id} processed successfully`)
-      })
-      .catch((error) => {
-        console.error(`Document ${newDocument.id} processing failed:`, error)
-      })
+    await processDocument(newDocument.id, file)
 
     return NextResponse.json({ 
-      message: 'Upload started',
+      message: 'Upload completed',
       documentId: newDocument.id
     })
 
@@ -57,11 +57,21 @@ async function processDocument(documentId: string, file: File) {
 
     content = preprocessText(content)
     
-    updateDocument(documentId, { content, status: 'ready' })
+    await updateDocumentAsync(documentId, { content, status: 'ready' })
+
+    // Optional: vectorize and store in KV if OpenAI is configured
+    try {
+      if (process.env.OPENAI_API_KEY) {
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+        await storeDocVectors(documentId, content, openai)
+      }
+    } catch (e) {
+      console.warn('Vectorization failed, continuing without vectors:', e)
+    }
 
   } catch (error) {
     console.error('Document processing error:', error)
-    updateDocument(documentId, { status: 'error' })
+    await updateDocumentAsync(documentId, { status: 'error' })
   }
 }
 

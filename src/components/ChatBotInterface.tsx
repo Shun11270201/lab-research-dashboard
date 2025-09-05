@@ -23,7 +23,7 @@ interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: Date
-  sources?: string[]
+  sources?: Array<string | { title: string; snippet?: string }>
 }
 
 interface KnowledgeBase {
@@ -67,7 +67,11 @@ export default function ChatBotInterface() {
       const response = await fetch('/api/knowledge-base')
       if (response.ok) {
         const data = await response.json()
-        setKnowledgeBase(data.documents || [])
+        const docs = (data.documents || []).map((d: any) => ({
+          ...d,
+          uploadedAt: d.uploadedAt ? new Date(d.uploadedAt) : new Date()
+        }))
+        setKnowledgeBase(docs)
       }
     } catch (error) {
       console.error('Failed to load knowledge base:', error)
@@ -303,15 +307,22 @@ export default function ChatBotInterface() {
                     {message.sources && message.sources.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-white/10">
                         <p className="text-xs text-gray-400 mb-2">参考資料:</p>
-                        <div className="flex flex-wrap gap-1">
-                          {message.sources.map((source, index) => (
-                            <span
-                              key={index}
-                              className="px-2 py-1 bg-white/10 rounded text-xs text-gray-300"
-                            >
-                              {source}
-                            </span>
-                          ))}
+                        <div className="flex flex-col gap-2">
+                          {message.sources.map((source, index) => {
+                            const isObj = typeof source === 'object'
+                            const title = isObj ? (source as any).title : String(source)
+                            const snippet = isObj ? (source as any).snippet : undefined
+                            return (
+                              <div key={index} className="px-2 py-2 bg-white/5 rounded">
+                                <div className="text-xs text-gray-200 font-medium">{title}</div>
+                                {snippet && (
+                                  <div className="text-[11px] text-gray-400 mt-1 line-clamp-3">
+                                    {snippet}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
                       </div>
                     )}
@@ -353,7 +364,7 @@ export default function ChatBotInterface() {
                   type="text"
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
+                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
                   placeholder="研究に関する質問を入力してください..."
                   className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded-lg focus:border-green-500 outline-none pr-12"
                 />

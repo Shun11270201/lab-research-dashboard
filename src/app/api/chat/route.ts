@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
+import { getDocumentsAsync } from '../../../lib/knowledgeStore'
+import { getIndexedDocIds, getDocVectors, ensureVectorsGradual } from '../../../lib/vectorStore'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -140,8 +142,8 @@ ${context}
 
     const aiResponse = response.choices[0]?.message?.content || ''
     
-    // 使用したソースを特定
-    const sources = relevantKnowledge.map(doc => doc.metadata.title)
+    // 使用したソース（引用スニペット付き）
+    const sources = await buildSourcesWithSnippets(message, relevantKnowledge)
 
     return NextResponse.json({
       response: aiResponse,
@@ -161,6 +163,38 @@ ${context}
   }
 }
 
+async function buildSourcesWithSnippets(query: string, docs: KnowledgeDocument[]) {
+  const res: { title: string; snippet?: string }[] = []
+  try {
+    const vecIds = new Set((await getIndexedDocIds()) || [])
+    let queryEmbedding: number[] | null = null
+    for (const doc of docs) {
+      const title = doc.metadata.title
+      if (vecIds.has(doc.id)) {
+        try {
+          if (!queryEmbedding) queryEmbedding = await generateEmbedding(query)
+          const vecs = await getDocVectors(doc.id)
+          if (vecs && vecs.length) {
+            let best = { sim: -1, text: '' }
+            for (const ch of vecs) {
+              const sim = cosineSimilarity(queryEmbedding!, ch.embedding)
+              if (sim > best.sim) best = { sim, text: ch.text }
+            }
+            res.push({ title, snippet: best.text.substring(0, 200) })
+            continue
+          }
+        } catch (e) {
+          // fallthrough
+        }
+      }
+      res.push({ title, snippet: doc.content.substring(0, 160) })
+    }
+  } catch (e) {
+    return docs.map(d => ({ title: d.metadata.title }))
+  }
+  return res
+}
+
 async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
   // キャッシュチェック
   const now = Date.now()
@@ -172,7 +206,7 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
   try {
     console.log('Loading fresh thesis data...')
     
-    // Use static knowledge base in all cases to avoid circular API calls
+    // Use static knowledge base bundled with the app
     const { knowledgeBase } = await import('../../../data/knowledgeBase')
     
     const thesisData = knowledgeBase.map(doc => ({
@@ -185,6 +219,22 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
         year: doc.metadata.year
       }
     }))
+
+    // Merge uploaded docs from store if available and have content
+    try {
+      const uploaded = await getDocumentsAsync()
+      uploaded
+        .filter(d => (d.content?.trim()?.length || 0) > 0)
+        .forEach(d => {
+          thesisData.push({
+            id: d.id,
+            content: d.content as string,
+            metadata: { title: d.name, type: d.type }
+          })
+        })
+    } catch (e) {
+      console.warn('Failed to merge uploaded docs:', e)
+    }
     
     // キャッシュを更新
     _thesisCache = thesisData
@@ -207,6 +257,20 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
     console.log(`小野さんの論文数: ${thesisData.filter(doc => doc.metadata.author?.includes('小野')).length}`)
     console.log('===============================')
     
+    // Gradually vectorize internal docs (non-blocking best-effort)
+    try {
+      if (process.env.OPENAI_API_KEY) {
+        await ensureVectorsGradual(
+          thesisData.map(d => ({ id: d.id, content: d.content })),
+          getOpenAI(),
+          3,
+          8000
+        )
+      }
+    } catch (e) {
+      console.warn('Gradual vectorization skipped:', e)
+    }
+
     return thesisData
   } catch (error) {
     console.error('Error loading thesis data:', error)
@@ -330,24 +394,37 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
         return candidates
           .slice(0, 5) // 上位5件
       } else if (candidates.length > 0) {
-        // 適度な候補数でセマンティック検索を実行
+        // 適度な候補数でセマンティック検索を実行（KVベクトル優先）
         console.log(`Performing semantic search on ${candidates.length} candidates`)
         const queryEmbedding = await generateEmbedding(query)
-        
-        const scoredDocs = await Promise.all(
-          candidates.map(async (doc) => {
-            const docEmbedding = await generateEmbedding(doc.content.substring(0, 4000)) // 長い文書は要約
-            const similarity = cosineSimilarity(queryEmbedding, docEmbedding)
-            return { doc, similarity }
-          })
-        )
-        
+        const vecIds = new Set((await getIndexedDocIds()) || [])
+
+        type Scored = { doc: KnowledgeDocument, similarity: number }
+        const scoredDocs: Scored[] = []
+        for (const doc of candidates) {
+          if (vecIds.has(doc.id)) {
+            const vecs = await getDocVectors(doc.id)
+            if (vecs && vecs.length) {
+              let best = 0
+              for (const ch of vecs) {
+                const sim = cosineSimilarity(queryEmbedding, ch.embedding)
+                if (sim > best) best = sim
+              }
+              scoredDocs.push({ doc, similarity: best })
+              continue
+            }
+          }
+          const docEmbedding = await generateEmbedding(doc.content.substring(0, 4000))
+          const similarity = cosineSimilarity(queryEmbedding, docEmbedding)
+          scoredDocs.push({ doc, similarity })
+        }
+
         return scoredDocs
           .sort((a, b) => b.similarity - a.similarity)
-          .slice(0, 5) // 上位5件
+          .slice(0, 5)
           .filter(item => item.similarity > 0.1)
           .map(item => item.doc)
-      } else {
+    } else {
         // 候補が少ない場合は全文書を対象にキーワード検索
         console.log('No specific candidates found, falling back to broad keyword search')
         return searchKnowledge(query, 'keyword', req)
