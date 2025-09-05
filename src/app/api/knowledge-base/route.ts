@@ -27,11 +27,12 @@ export async function GET() {
   try {
     // Try KV zset + hash layout first
     try {
-      const ids = await kv.zrange<string>(KEY_INDEX, 0, -1, { rev: true })
+      const ids = (await kv.zrange(KEY_INDEX, 0, -1, { rev: true })) as unknown as string[]
       if (ids && ids.length > 0) {
         const pipeline = kv.pipeline()
-        ids.forEach(id => pipeline.hgetall<StoredDocument>(KEY_DOC(id)))
-        const docs = (await pipeline.exec()).filter(Boolean) as StoredDocument[]
+        ids.forEach(id => pipeline.hgetall(KEY_DOC(id)))
+        const res = await pipeline.exec()
+        const docs = (res as unknown[]).filter(Boolean) as unknown as StoredDocument[]
         return NextResponse.json({
           documents: docs.map(d => ({
             id: d.id,
