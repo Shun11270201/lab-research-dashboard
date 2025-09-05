@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
-import { knowledgeBase } from '@/data/knowledgeBase'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -15,6 +14,11 @@ function getOpenAI() {
   }
   return _openai
 }
+
+// 論文データのキャッシュ
+let _thesisCache: KnowledgeDocument[] | null = null
+let _cacheTimestamp: number = 0
+const CACHE_DURATION = 30 * 60 * 1000 // 30分間キャッシュ
 // 利用箇所：openai.◯◯ → getOpenAI().◯◯ に置換
 // 例：getOpenAI().chat.completions.create({ ... })
 
@@ -116,8 +120,62 @@ ${context}
   }
 }
 
+async function loadThesisData(): Promise<KnowledgeDocument[]> {
+  // キャッシュチェック
+  const now = Date.now()
+  if (_thesisCache && (now - _cacheTimestamp) < CACHE_DURATION) {
+    console.log('Using cached thesis data')
+    return _thesisCache
+  }
+
+  try {
+    console.log('Loading fresh thesis data...')
+    const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/load-thesis`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    })
+    
+    if (!response.ok) {
+      console.error('Failed to load thesis data:', response.statusText)
+      return _thesisCache || []
+    }
+    
+    const data = await response.json()
+    
+    // Convert thesis documents to knowledge base format
+    const thesisData = data.documents?.map((doc: any) => ({
+      id: doc.id,
+      content: doc.content,
+      metadata: {
+        title: doc.title,
+        type: 'thesis' as const,
+        author: doc.author,
+        year: doc.year
+      }
+    })) || []
+    
+    // キャッシュを更新
+    _thesisCache = thesisData
+    _cacheTimestamp = now
+    console.log(`Cached ${thesisData.length} thesis documents`)
+    
+    return thesisData
+  } catch (error) {
+    console.error('Error loading thesis data:', error)
+    return _thesisCache || []
+  }
+}
+
 async function searchKnowledge(query: string, searchMode: string = 'semantic'): Promise<KnowledgeDocument[]> {
-  // 簡易的な検索実装（実際の実装ではベクトル検索を使用）
+  // Load actual thesis documents
+  const knowledgeBase = await loadThesisData()
+  
+  if (knowledgeBase.length === 0) {
+    console.warn('No thesis data loaded for search')
+    return []
+  }
   
   if (searchMode === 'keyword') {
     // キーワード検索
