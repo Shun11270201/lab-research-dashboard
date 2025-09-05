@@ -27,71 +27,82 @@ const kvEnabled = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKE
 
 export async function GET() {
   try {
-    // Try Blob metadata first
+    // Collect from Blob metadata (if any)
+    const combined = new Map<string, StoredDocument>()
     try {
       const meta = await readMetadata()
-      if (meta && meta.documents.length > 0) {
-        return NextResponse.json({
-          documents: meta.documents.map(d => ({
+      if (meta && Array.isArray(meta.documents)) {
+        for (const d of meta.documents) {
+          if (!d || !d.id) continue
+          combined.set(d.id, {
             id: d.id,
             name: d.name,
             type: d.type,
             uploadedAt: d.uploadedAt,
             status: d.status,
-          }))
-        })
-      }
-    } catch {}
-
-    // Try KV zset + hash layout next (if configured)
-    try {
-      if (!kvEnabled) throw new Error('KV disabled')
-      const ids = (await kv.zrange(KEY_INDEX, 0, -1, { rev: true })) as unknown as string[]
-      if (ids && ids.length > 0) {
-        const pipeline = kv.pipeline()
-        ids.forEach(id => pipeline.hgetall(KEY_DOC(id)))
-        const res = await pipeline.exec()
-        const docs = (res as unknown[]).filter(Boolean) as unknown as StoredDocument[]
-        return NextResponse.json({
-          documents: docs.map(d => ({
-            id: d.id,
-            name: d.name,
-            type: d.type,
-            uploadedAt: d.uploadedAt,
-            status: d.status,
-          }))
-        })
-      }
-    } catch {}
-
-    // Seed from legacy list key if present (lab:docs)
-    try {
-      if (!kvEnabled) throw new Error('KV disabled')
-      const legacy = await kv.get<StoredDocument[]>('lab:docs')
-      if (Array.isArray(legacy) && legacy.length > 0) {
-        const pipe = kv.pipeline()
-        for (const d of legacy) {
-          pipe.hset(KEY_DOC(d.id), d as unknown as Record<string, unknown>)
-          const score = Number.isFinite(Date.parse(d.uploadedAt)) ? Date.parse(d.uploadedAt) : Date.now()
-          pipe.zadd(KEY_INDEX, { score, member: d.id })
+            content: d.content,
+            author: d.author,
+          })
         }
-        await pipe.exec()
-        return NextResponse.json({
-          documents: legacy.map(d => ({
-            id: d.id,
-            name: d.name,
-            type: d.type,
-            uploadedAt: d.uploadedAt,
-            status: d.status,
-          }))
-        })
       }
     } catch {}
 
-    // Fallback to in-memory/dev store
-    const fallback = await getDocumentsAsync()
+    // Merge KV zset + hash (if configured)
+    try {
+      if (kvEnabled) {
+        const ids = (await kv.zrange(KEY_INDEX, 0, -1, { rev: true })) as unknown as string[]
+        if (ids && ids.length > 0) {
+          const pipeline = kv.pipeline()
+          ids.forEach(id => pipeline.hgetall(KEY_DOC(id)))
+          const res = await pipeline.exec()
+          const docs = (res as unknown[]).filter(Boolean) as unknown as StoredDocument[]
+          for (const d of docs) {
+            if (!d || !d.id) continue
+            const prev = combined.get(d.id)
+            // Prefer richer record (with content/author). Otherwise merge fields.
+            combined.set(d.id, {
+              id: d.id,
+              name: d.name || prev?.name || '',
+              type: (d.type || prev?.type || 'document') as DocType,
+              uploadedAt: d.uploadedAt || prev?.uploadedAt || new Date().toISOString(),
+              status: (d.status || prev?.status || 'ready') as 'processing' | 'ready' | 'error',
+              content: d.content || prev?.content,
+              author: d.author || prev?.author,
+            })
+          }
+        }
+      }
+    } catch {}
+
+    // Seed from legacy list and merge
+    try {
+      if (kvEnabled) {
+        const legacy = await kv.get<StoredDocument[]>('lab:docs')
+        if (Array.isArray(legacy) && legacy.length > 0) {
+          for (const d of legacy) {
+            combined.set(d.id, d)
+          }
+        }
+      }
+    } catch {}
+
+    // Fallback to in-memory/dev store and merge
+    try {
+      const fallback = await getDocumentsAsync()
+      for (const d of fallback) {
+        combined.set(d.id, d)
+      }
+    } catch {}
+
+    // Build response array, sorted by uploadedAt desc
+    const list = Array.from(combined.values()).sort((a, b) => {
+      const sa = Number.isFinite(Date.parse(a.uploadedAt)) ? Date.parse(a.uploadedAt) : 0
+      const sb = Number.isFinite(Date.parse(b.uploadedAt)) ? Date.parse(b.uploadedAt) : 0
+      return sb - sa
+    })
+
     return NextResponse.json({
-      documents: fallback.map(d => ({
+      documents: list.map(d => ({
         id: d.id,
         name: d.name,
         type: d.type,
