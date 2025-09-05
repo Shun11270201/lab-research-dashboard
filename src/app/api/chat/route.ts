@@ -229,7 +229,7 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
           thesisData.push({
             id: d.id,
             content: d.content as string,
-            metadata: { title: d.name, type: d.type, author: d.author }
+            metadata: { title: d.name, type: d.type, author: d.author, year: undefined }
           })
         })
     } catch (e) {
