@@ -48,13 +48,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'OpenAI API key not configured. Please add OPENAI_API_KEY to Vercel environment variables.' }, { status: 500 })
     }
 
-    // 関連する知識を検索
+    // 関連する知識を検索（より多くの文書を取得）
     const relevantKnowledge = await searchKnowledge(message, searchMode)
     
-    // コンテキストを構築
-    const context = relevantKnowledge.map(doc => 
-      `【${doc.metadata.title}】\n${doc.content}`
-    ).join('\n\n')
+    // コンテキストを構築（より詳細な情報を含める）
+    const context = relevantKnowledge.map(doc => {
+      const authorInfo = doc.metadata.author ? `（著者：${doc.metadata.author}）` : ''
+      const yearInfo = doc.metadata.year ? `（${doc.metadata.year}年度）` : ''
+      return `【${doc.metadata.title}】${authorInfo}${yearInfo}\n${doc.content}`
+    }).join('\n\n---\n\n')
+    
+    console.log(`Found ${relevantKnowledge.length} relevant documents for query: "${message}"`)
 
     // 会話履歴を構築
     const conversationHistory = history?.slice(-6).map((msg: any) => ({
@@ -63,31 +67,28 @@ export async function POST(req: NextRequest) {
     })) || []
 
     // システムプロンプト
-    const systemPrompt = `あなたは中西研究室の人間工学専門AIアシスタントです。研究室の豊富な人間工学研究に基づいて、学術的で正確な回答を提供してください。
+    const systemPrompt = `あなたは中西研究室の人間工学専門AIアシスタントです。以下の実際の研究データベースに基づいて、具体的で正確な回答を提供してください。
 
-【利用可能な人間工学研究分野】
-・認知工学（Eye-tracking、fNIRS、認知負荷測定、注意配分）
-・ユーザビリティ評価（SD法、AHP、感性工学、UI/UX設計）
-・VR・空間認知（HMD、距離知覚、モーションキャプチャ、没入感）
-・ヒューマンエラー（SHERPA、エラー分析、IoT監視システム）
-・高齢者インターフェース（認知機能低下、ユニバーサルデザイン）
-・疲労・ストレス評価（VAS、心拍変動性、VDT作業、生理指標）
-・チームワーク（航空管制、コミュニケーション、Human Factors）
-・安全人間工学（危険予知、Heinrichの法則、事故防止）
-・生体力学・作業姿勢・音響心理学・感性評価・リハビリテーション
-
-以下の人間工学研究データベースの情報を参考にして回答してください：
+【重要】以下の研究情報が利用可能です：
 ${context}
 
-回答の際は：
-1. 具体的な測定手法や評価技術を含めて詳しく説明する
-2. 被験者実験の結果や統計的有意性を示す
-3. 人間工学的観点からの設計指針や改善提案を含める
-4. 実用的な応用例や現場での活用方法を説明する
-5. 専門用語を使いながらも分かりやすく説明する
-6. 日本語で回答する
+【回答の原則】
+1. **具体性を重視**：上記の研究データベースから具体的な研究内容、実験手法、結果を引用する
+2. **研究者の特定**：特定の研究者について質問された場合、その人の実際の研究を正確に紹介する
+3. **実験詳細の提示**：被験者数、実験条件、測定指標、統計的有意性を可能な限り具体的に示す
+4. **手法の詳細**：使用された技術（Eye-tracking、fNIRS、HMD、VASなど）の詳細を説明する
+5. **実用的価値**：研究から得られた設計指針や応用例を具体的に提示する
 
-参考にした研究論文がある場合は、回答の最後に著者と論文タイトルを明記してください。`
+【回答形式】
+- 質問された研究者が上記データベースにある場合：その人の実際の研究内容を詳細に説明
+- 一般的な質問の場合：関連する実際の研究事例を複数引用して包括的に回答
+- 不明な場合：「データベース内の関連研究から判断すると...」として推測ではなく事実に基づいて回答
+
+【出典の明記】
+参考にした研究がある場合は、必ず最後に以下の形式で明記：
+- 参考研究：[著者名]「[論文タイトル]」([年度])
+
+一般的な情報ではなく、必ず上記の具体的な研究データに基づいて回答してください。`
 
     // OpenAI APIを呼び出し
     const response = await getOpenAI().chat.completions.create({
@@ -200,32 +201,75 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic'): 
       })
     )
   } else {
-    // セマンティック検索（簡易版）
-    // 実際の実装では OpenAI Embeddings や専用のベクトルDBを使用
-    
+    // セマンティック検索（改良版：まず関連文書を絞り込み、その後セマンティック検索）
     try {
-      // クエリの埋め込みを生成
-      const queryEmbedding = await generateEmbedding(query)
+      // Step 1: キーワードベースで候補を絞り込み（高速）
+      const keywords = query.toLowerCase().split(/\s+/)
+      let candidates = knowledgeBase
       
-      // 各ドキュメントとの類似度を計算（簡易版）
-      const scoredDocs = await Promise.all(
-        knowledgeBase.map(async (doc) => {
-          const docEmbedding = await generateEmbedding(doc.content)
-          const similarity = cosineSimilarity(queryEmbedding, docEmbedding)
-          return { doc, similarity }
+      // 人名や専門用語での事前フィルタリング
+      const nameKeywords = keywords.filter(k => /^[ぁ-ゖァ-ヺ一-龯]{2,10}$/.test(k))
+      const technicalKeywords = keywords.filter(k => k.length > 2)
+      
+      if (nameKeywords.length > 0 || technicalKeywords.length > 0) {
+        candidates = knowledgeBase.filter(doc => {
+          const lowerContent = doc.content.toLowerCase()
+          const lowerTitle = doc.metadata.title.toLowerCase()
+          const lowerAuthor = doc.metadata.author?.toLowerCase()
+          
+          // 人名での強いマッチング
+          const nameMatch = nameKeywords.some(name => {
+            if (lowerAuthor) {
+              return lowerAuthor.includes(name) || name.includes(lowerAuthor) || 
+                     lowerTitle.includes(name) || lowerContent.includes(name)
+            }
+            return lowerTitle.includes(name) || lowerContent.includes(name)
+          })
+          
+          // 技術用語での関連性チェック
+          const techMatch = technicalKeywords.some(tech => 
+            lowerContent.includes(tech) || lowerTitle.includes(tech)
+          )
+          
+          return nameMatch || techMatch || 
+                 keywords.some(k => lowerContent.includes(k) || lowerTitle.includes(k))
         })
-      )
+        
+        console.log(`Filtered candidates from ${knowledgeBase.length} to ${candidates.length}`)
+      }
       
-      // 類似度でソートして上位を返す
-      return scoredDocs
-        .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, 3)
-        .filter(item => item.similarity > 0.1) // 閾値フィルタリング
-        .map(item => item.doc)
+      // Step 2: 候補が多すぎる場合はキーワード検索、少ない場合はセマンティック検索
+      if (candidates.length > 10) {
+        // 多い場合は高速なキーワードベース検索
+        console.log('Using fast keyword-based search due to many candidates')
+        return candidates
+          .slice(0, 5) // 上位5件
+      } else if (candidates.length > 0) {
+        // 適度な候補数でセマンティック検索を実行
+        console.log(`Performing semantic search on ${candidates.length} candidates`)
+        const queryEmbedding = await generateEmbedding(query)
+        
+        const scoredDocs = await Promise.all(
+          candidates.map(async (doc) => {
+            const docEmbedding = await generateEmbedding(doc.content.substring(0, 4000)) // 長い文書は要約
+            const similarity = cosineSimilarity(queryEmbedding, docEmbedding)
+            return { doc, similarity }
+          })
+        )
+        
+        return scoredDocs
+          .sort((a, b) => b.similarity - a.similarity)
+          .slice(0, 5) // 上位5件
+          .filter(item => item.similarity > 0.1)
+          .map(item => item.doc)
+      } else {
+        // 候補が少ない場合は全文書を対象にキーワード検索
+        console.log('No specific candidates found, falling back to broad keyword search')
+        return searchKnowledge(query, 'keyword')
+      }
         
     } catch (error) {
       console.error('Semantic search error:', error)
-      // フォールバックとしてキーワード検索を実行
       return searchKnowledge(query, 'keyword')
     }
   }
