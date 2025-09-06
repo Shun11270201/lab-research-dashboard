@@ -431,7 +431,7 @@ function analyzeQuestion(query: string): { isFieldInquiry: boolean; field?: stri
     const match = lowerQuery.match(pattern)
     if (match) {
       let field = match[1].trim()
-      let specificTechnology = null
+      let specificTechnology: string | undefined = undefined
       
       // 技術特化パターンの場合
       if (field.includes('eye') || field.includes('アイト') || field.includes('視線')) {
