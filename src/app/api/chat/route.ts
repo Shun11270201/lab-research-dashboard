@@ -424,6 +424,7 @@ function analyzeQuestion(query: string): { isFieldInquiry: boolean; field?: stri
     /(eeg|脳波|electroencephalography).*(使|利用|活用).*(人|者|研究者)/,
     /(emg|筋電図|electromyography).*(使|利用|活用).*(人|者|研究者)/,
     /(開眼安静|eyes-?open.*resting|ベースライン測定).*(使|利用|活用).*(人|者|研究者)/,
+    /(閉眼安静|eyes-?closed.*resting|閉眼条件).*(使|利用|活用).*(人|者|研究者)/,
     /(ux|ユーザーエクスペリエンス|ユーザビリティ|usability).*(研究|評価|分析).*(人|者|研究者)/
   ]
   
@@ -446,9 +447,12 @@ function analyzeQuestion(query: string): { isFieldInquiry: boolean; field?: stri
       } else if (field.includes('emg') || field.includes('筋電')) {
         specificTechnology = 'EMG'
         field = 'emg'
-      } else if (field.includes('開眼') || field.includes('安静')) {
+      } else if (field.includes('開眼') || (field.includes('安静') && !field.includes('閉眼'))) {
         specificTechnology = '開眼安静'
         field = '開眼'
+      } else if (field.includes('閉眼')) {
+        specificTechnology = '閉眼安静'
+        field = '閉眼'
       } else if (field.includes('ux') || field.includes('ユーザビリティ')) {
         specificTechnology = 'UX'
         field = 'ux'
@@ -502,15 +506,19 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
   const questionAnalysis = analyzeQuestion(query)
   console.log('質問分析結果:', questionAnalysis)
   
+  // 動的キーワード拡張：実際のデータから関連用語を抽出
+  const dynamicKeywords = extractDynamicKeywords(query, knowledgeBase)
+  console.log(`動的抽出キーワード: [${dynamicKeywords.join(', ')}]`)
+  
   // 効率的なキーワード検索（人名・技術用語を優先）
   const keywords = query.toLowerCase().split(/[\s、，。！？]+/).filter(k => k.length > 0)
-  console.log(`検索キーワード: [${keywords.join(', ')}]`)
+  console.log(`基本検索キーワード: [${keywords.join(', ')}]`)
   
   // 質問タイプに応じて検索戦略を調整
   if (questionAnalysis.isFieldInquiry) {
     console.log(`分野検索モード: ${questionAnalysis.field}`)
-    // 分野に関する質問の場合、必ずキーワード検索で確実にヒット
-    return keywordSearch(knowledgeBase)
+    // 分野に関する質問の場合、動的キーワードを含めて確実にヒット
+    return keywordSearch(knowledgeBase, [...keywords, ...dynamicKeywords])
   }
   
   // 人名を強く指定するガード（クエリに人名らしき漢字2-6文字が含まれ、DB内に該当著者がいる場合は著者一致の文書に限定）
@@ -525,15 +533,15 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
       if (authorOrTitleMatched.length > 0) {
         console.log(`Author-guard active: limiting to ${authorOrTitleMatched.length} docs by [${nameTokens.join(', ')}]`)
         // 人名一致時は確実性を優先し、キーワード検索で返す（ベクトル未構築でもヒット）
-        return keywordSearch(authorOrTitleMatched)
+        return keywordSearch(authorOrTitleMatched, keywords)
       }
     }
   } catch {}
 
-  async function keywordSearch(base: KnowledgeDocument[]): Promise<KnowledgeDocument[]> {
+  async function keywordSearch(base: KnowledgeDocument[], customKeywords?: string[]): Promise<KnowledgeDocument[]> {
     // キーワード検索（分野・技術キーワード対応強化版）
     console.log('=== 強化版キーワード検索実行中 ===')
-    const baseKeywords = query.toLowerCase().split(/\s+/).filter(Boolean)
+    const baseKeywords = customKeywords || query.toLowerCase().split(/\s+/).filter(Boolean)
     const kanjiTokens = (query.match(/[一-龯]{2,3}/g) || [])
     let searchKeywords = Array.from(new Set([...baseKeywords, ...kanjiTokens]))
     
@@ -548,9 +556,10 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
       'ユーザビリティ': ['usability', 'sus', 'ux', 'ユーザーテスト', 'タスク分析', 'ヒューリスティック評価', 'sd法', 'ahp', '感性工学', '操作性', '使いやすさ', 'インタラクション', 'プロトタイプ', 'ワイヤーフレーム'],
       'デザイン': ['ui', 'ux', 'インターフェース', 'レイアウト', '色彩', 'タイポグラフィ', 'アイコン', 'ナビゲーション', 'プロトタイピング', 'フィードバック', 'アフォーダンス', 'メンタルモデル'],
       
-      // 開眼安静・測定手法関連
+      // 開眼・閉眼安静・測定手法関連
       '開眼': ['開眼安静', 'eyes-open resting', 'ベースライン', 'baseline', 'rest state', '安静状態', 'pre-task', '事前測定'],
-      '安静': ['開眼安静', '安静状態', 'resting state', 'baseline', 'ベースライン測定', '事前測定', 'pre-task'],
+      '閉眼': ['閉眼安静', 'eyes-closed resting', 'eyes closed', 'ベースライン', 'baseline', 'rest state', '安静状態', 'pre-task', '事前測定', 'リラクゼーション', '瞑想'],
+      '安静': ['開眼安静', '閉眼安静', '安静状態', 'resting state', 'baseline', 'ベースライン測定', '事前測定', 'pre-task', 'eyes-open', 'eyes-closed'],
       
       // 認知・脳機能関連
       '認知': ['認知負荷', '認知工学', '注意', '記憶', 'eye-tracking', 'fnirs', '認知資源', '認知機能', 'ワーキングメモリ', '作業記憶', '注意制御', '処理速度', 'マルチタスク', '認知的負荷', 'メンタルワークロード', 'cognitive load'],
@@ -747,7 +756,7 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
       if (candidates.length > 10) {
         // 多い場合は高速なキーワードベース検索
         console.log('Using fast keyword-based search due to many candidates')
-        return candidates.slice(0, 5) // 上位5件
+        return keywordSearch(candidates)
       } else if (candidates.length > 0) {
         // 適度な候補数でセマンティック検索を実行（KVベクトル優先）
         console.log(`Performing semantic search on ${candidates.length} candidates`)
@@ -780,9 +789,10 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
           .filter(item => item.similarity > 0.1)
           .map(item => item.doc)
       } else {
-        // 候補が少ない場合は全文書を対象にキーワード検索
-        console.log('No specific candidates found, falling back to broad keyword search')
-        return keywordSearch(knowledgeBase)
+        // 候補が見つからない場合は全文書対象の動的検索
+        console.log('No candidates found, trying dynamic keyword search on all documents')
+        const dynamicKeywords = extractDynamicKeywords(query, knowledgeBase)
+        return keywordSearch(knowledgeBase, [...keywords, ...dynamicKeywords])
       }
         
     } catch (error) {
@@ -796,6 +806,51 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
   } else {
     return semanticSearch(knowledgeBase)
   }
+}
+
+// 動的キーワード抽出機能：PDFデータから関連用語を自動抽出
+function extractDynamicKeywords(query: string, documents: KnowledgeDocument[]): string[] {
+  const lowerQuery = query.toLowerCase()
+  const dynamicKeywords = new Set<string>()
+  
+  // 基本クエリワードを取得
+  const queryWords = lowerQuery.split(/[\s、，。！？\-_]+/).filter(w => w.length > 1)
+  
+  // 全文書から関連する専門用語を抽出
+  documents.forEach(doc => {
+    const content = doc.content.toLowerCase()
+    const title = doc.metadata.title.toLowerCase()
+    
+    // クエリワードが含まれている文書から専門用語を抽出
+    const hasQueryMatch = queryWords.some(word => content.includes(word) || title.includes(word))
+    
+    if (hasQueryMatch) {
+      // 英語の専門用語を抽出（大文字小文字変換、ハイフンあり）
+      const englishTerms = content.match(/[a-z]+(-[a-z]+)*[a-z]/g) || []
+      englishTerms.forEach(term => {
+        if (term.length > 2 && !['and', 'the', 'with', 'for', 'that', 'this', 'from'].includes(term)) {
+          dynamicKeywords.add(term)
+        }
+      })
+      
+      // 日本語の専門用語（カタカナ3文字以上）
+      const katakanaTerms = content.match(/[ア-ヺー]{3,}/g) || []
+      katakanaTerms.forEach(term => dynamicKeywords.add(term))
+      
+      // 漢字+カナの複合語（例：生理指標、認知負荷）
+      const compounds = content.match(/[一-龯]+[ひらがなカタカナ][一-龯ひらがなカタカナ]*/g) || []
+      compounds.forEach(term => {
+        if (term.length >= 3) dynamicKeywords.add(term)
+      })
+      
+      // 略語（大文字2-5文字）
+      const acronyms = (content.match(/[A-Z]{2,5}(?![a-z])/g) || []).map(a => a.toLowerCase())
+      acronyms.forEach(acronym => dynamicKeywords.add(acronym))
+    }
+  })
+  
+  // クエリワードと関連性の高い用語のみを返す（最大10個）
+  return Array.from(dynamicKeywords).slice(0, 10)
 }
 
 async function generateEmbedding(text: string): Promise<number[]> {
