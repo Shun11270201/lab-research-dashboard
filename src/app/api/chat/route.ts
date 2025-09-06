@@ -402,23 +402,59 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
 }
 
 // 質問パターンを分析する関数
-function analyzeQuestion(query: string): { isFieldInquiry: boolean; field?: string; pattern?: string } {
+function analyzeQuestion(query: string): { isFieldInquiry: boolean; field?: string; pattern?: string; specificTechnology?: string } {
   const lowerQuery = query.toLowerCase()
   
-  // 「〜の研究をしていた人」「〜を使った研究」などのパターン
+  // 「〜の研究をしていた人」「〜を使った研究」「〜を手法に使った人」などの拡張パターン
   const fieldPatterns = [
+    // 基本パターン
     /(.+?)(の|を|に関する|について).*(研究|調査|分析|測定|評価|実験).*(人|者|研究者|学生)/,
     /(.+?)(を|で|による).*(研究|調査|分析|測定|評価|実験).*(している|した|行った).*(人|者|研究者|学生)/,
     /(.+?)(の|を|に関する|について).*(研究|調査|分析|測定|評価)/,
-    /(.+?)(を|で).*(使|利用|活用|適用|採用).*(研究|実験)/
+    /(.+?)(を|で).*(使|利用|活用|適用|採用).*(研究|実験)/,
+    
+    // 手法・技術特化パターン
+    /(.+?)(を|で).*(手法|方法|技術|技法|アプローチ).*(使|利用|活用|適用|採用).*(人|者|研究者)/,
+    /(.+?)(を|で|による).*(手法|方法|技術|技法|アプローチ).*(研究|実験|分析).*(人|者|研究者)/,
+    /(.+?)(手法|方法|技術|技法|アプローチ).*(使|利用|活用|適用).*(研究|実験).*(人|者|研究者)/,
+    
+    // 特定技術名での直接質問
+    /(eye-?tracking|アイトラッキング|視線追跡).*(使|利用|活用).*(人|者|研究者)/,
+    /(fnirs|機能的近赤外分光法).*(使|利用|活用).*(人|者|研究者)/,
+    /(eeg|脳波|electroencephalography).*(使|利用|活用).*(人|者|研究者)/,
+    /(emg|筋電図|electromyography).*(使|利用|活用).*(人|者|研究者)/,
+    /(開眼安静|eyes-?open.*resting|ベースライン測定).*(使|利用|活用).*(人|者|研究者)/,
+    /(ux|ユーザーエクスペリエンス|ユーザビリティ|usability).*(研究|評価|分析).*(人|者|研究者)/
   ]
   
   for (const pattern of fieldPatterns) {
     const match = lowerQuery.match(pattern)
     if (match) {
       let field = match[1].trim()
+      let specificTechnology = null
       
-      // フィールド名を正規化
+      // 技術特化パターンの場合
+      if (field.includes('eye') || field.includes('アイト') || field.includes('視線')) {
+        specificTechnology = 'eye-tracking'
+        field = 'eye'
+      } else if (field.includes('fnirs') || field.includes('近赤外')) {
+        specificTechnology = 'fNIRS'
+        field = 'fnirs'
+      } else if (field.includes('eeg') || field.includes('脳波')) {
+        specificTechnology = 'EEG'
+        field = 'eeg'
+      } else if (field.includes('emg') || field.includes('筋電')) {
+        specificTechnology = 'EMG'
+        field = 'emg'
+      } else if (field.includes('開眼') || field.includes('安静')) {
+        specificTechnology = '開眼安静'
+        field = '開眼'
+      } else if (field.includes('ux') || field.includes('ユーザビリティ')) {
+        specificTechnology = 'UX'
+        field = 'ux'
+      }
+      
+      // 従来のフィールド正規化
       if (field.includes('生理')) field = '生理'
       if (field.includes('認知')) field = '認知'
       if (field.includes('疲労')) field = '疲労'
@@ -430,11 +466,16 @@ function analyzeQuestion(query: string): { isFieldInquiry: boolean; field?: stri
       if (field.includes('ユーザビリティ') || field.includes('usability')) field = 'ユーザビリティ'
       if (field.includes('チーム')) field = 'チーム'
       if (field.includes('安全')) field = '安全'
+      if (field.includes('感性')) field = '感性'
+      if (field.includes('統計') || field.includes('機械学習')) field = '統計'
+      if (field.includes('生体力学') || field.includes('姿勢')) field = '生体力学'
+      if (field.includes('照明') || field.includes('環境')) field = '環境'
       
-      console.log(`分野特定質問を検出: "${field}" (元: "${match[1]}")`)
+      console.log(`拡張分野特定質問を検出: "${field}" (技術: "${specificTechnology || 'N/A'}") (元: "${match[1]}")`)
       return { 
         isFieldInquiry: true, 
         field, 
+        specificTechnology,
         pattern: match[0] 
       }
     }
@@ -496,20 +537,62 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
     const kanjiTokens = (query.match(/[一-龯]{2,3}/g) || [])
     let searchKeywords = Array.from(new Set([...baseKeywords, ...kanjiTokens]))
     
-    // 分野・技術キーワード拡張マップ
+    // 大幅強化された分野・技術・手法キーワード拡張マップ
     const fieldExpansions: { [key: string]: string[] } = {
-      '生理': ['生理指標', 'vas', 'visual analog scale', '心拍', 'コルチゾール', 'fnirs', '生体信号', '生理反応', '血圧', '皮膚電位'],
-      '指標': ['生理指標', '評価指標', '測定指標', 'vas', '心拍変動', 'hrv'],
-      '認知': ['認知負荷', '認知工学', '注意', '記憶', 'eye-tracking', 'fnirs', '認知資源', '認知機能'],
-      '疲労': ['疲労評価', '眼精疲労', 'vdt', 'visual display terminal', '主観的疲労感', '全身疲労'],
-      'ストレス': ['ストレス測定', 'コルチゾール', '心拍変動性', '唾液', '生理指標'],
-      'vr': ['バーチャルリアリティ', '仮想現実', 'hmd', 'head mounted display', '空間認知', 'vr酔い'],
-      'エラー': ['ヒューマンエラー', 'sherpa', '作業エラー', '事故防止', 'iot'],
-      '高齢者': ['高齢', 'ユニバーサルデザイン', '認知機能', '加齢', 'タブレット'],
-      '航空': ['航空安全', 'asrs', 'レジリエンス', 'コンピテンス', '緊急着水'],
-      'ユーザビリティ': ['usability', 'sd法', 'ahp', '感性工学', 'ux'],
-      'チーム': ['チームワーク', '協調', '航空管制', 'コミュニケーション', 'human factors'],
-      '安全': ['安全人間工学', '危険予知', '事故防止', 'heinrich', 'ヒヤリハット', 'リスク評価']
+      // 生理指標関連（大幅拡張）
+      '生理': ['生理指標', 'vas', 'visual analog scale', '心拍', 'コルチゾール', 'fnirs', '生体信号', '生理反応', '血圧', '皮膚電位', 'ecg', '心電図', 'eeg', '脳波', 'emg', '筋電図', 'gsr', '皮膚電気反応', '皮膚コンダクタンス', 'eog', '眼電図', 'hrv', '心拍変動性', 'アルファ波', 'ベータ波', 'シータ波', 'ガンマ波', '瞳孔径', 'マイクロサッケード', '瞬目', '皮膚温度', '呼吸', '血中酸素', 'spo2'],
+      '指標': ['生理指標', '評価指標', '測定指標', 'vas', '心拍変動', 'hrv', 'バイオマーカー', '客観指標', '主観指標'],
+      
+      // UX・ユーザビリティ関連
+      'ux': ['ユーザーエクスペリエンス', 'user experience', 'ユーザビリティ', 'usability', 'sus', 'system usability scale', 'ui', 'user interface', 'インターフェース', 'デザイン', 'プロトタイプ', 'フィードバック', 'アクセシビリティ', 'ユニバーサルデザイン', 'ユーザーテスト', '使いやすさ', '操作性', 'レスポンシブ'],
+      'ユーザビリティ': ['usability', 'sus', 'ux', 'ユーザーテスト', 'タスク分析', 'ヒューリスティック評価', 'sd法', 'ahp', '感性工学', '操作性', '使いやすさ', 'インタラクション', 'プロトタイプ', 'ワイヤーフレーム'],
+      'デザイン': ['ui', 'ux', 'インターフェース', 'レイアウト', '色彩', 'タイポグラフィ', 'アイコン', 'ナビゲーション', 'プロトタイピング', 'フィードバック', 'アフォーダンス', 'メンタルモデル'],
+      
+      // 開眼安静・測定手法関連
+      '開眼': ['開眼安静', 'eyes-open resting', 'ベースライン', 'baseline', 'rest state', '安静状態', 'pre-task', '事前測定'],
+      '安静': ['開眼安静', '安静状態', 'resting state', 'baseline', 'ベースライン測定', '事前測定', 'pre-task'],
+      
+      // 認知・脳機能関連
+      '認知': ['認知負荷', '認知工学', '注意', '記憶', 'eye-tracking', 'fnirs', '認知資源', '認知機能', 'ワーキングメモリ', '作業記憶', '注意制御', '処理速度', 'マルチタスク', '認知的負荷', 'メンタルワークロード', 'cognitive load'],
+      '脳': ['脳波', 'eeg', 'fnirs', '脳機能', '前頭前野', '脳活動', '神経', 'ニューロ', 'ブレイン', 'brain', '脳血流', 'ヘモグロビン', 'オキシヘモグロビン', 'デオキシヘモグロビン'],
+      '注意': ['attention', '注意配分', '注意制御', '集中', '集中力', 'フォーカス', '選択的注意', '分割注意', '持続的注意'],
+      
+      // 測定技術・機器関連（大幅強化）
+      'eye': ['eye-tracking', 'アイトラッキング', '視線追跡', '眼球運動', '注視', '注視点', 'fixation', 'saccade', 'サッケード', '瞳孔', 'pupil', '瞬目', 'blink'],
+      'fnirs': ['機能的近赤外分光法', 'functional near-infrared spectroscopy', '脳血流', 'ヘモグロビン', '前頭前野', '脳活動', 'オキシhb', 'デオキシhb'],
+      'eeg': ['脳波', 'electroencephalography', 'アルファ波', 'ベータ波', 'シータ波', 'ガンマ波', 'デルタ波', '事象関連電位', 'erp', 'p300', 'n400', '電極'],
+      'emg': ['筋電図', 'electromyography', '筋活動', '筋収縮', '表面筋電', '筋疲労', '筋力', '筋緊張'],
+      'ecg': ['心電図', 'electrocardiography', '心拍', 'heart rate', 'rr間隔', '不整脈', 'qrs', '心臓'],
+      
+      // 疲労・ストレス関連
+      '疲労': ['疲労評価', '眼精疲労', 'vdt', 'visual display terminal', '主観的疲労感', '全身疲労', '精神疲労', '肉体疲労', '疲労度', 'fatigue'],
+      'ストレス': ['ストレス測定', 'コルチゾール', '心拍変動性', '唾液', '生理指標', 'ストレス反応', 'ストレッサー', 'ストレス評価', '心理的ストレス', '生理的ストレス'],
+      
+      // VR・AR関連
+      'vr': ['バーチャルリアリティ', '仮想現実', 'hmd', 'head mounted display', '空間認知', 'vr酔い', '没入', 'immersion', 'モーションキャプチャ', '仮想環境', '3d', 'オキュラス', 'oculus'],
+      'ar': ['拡張現実', 'augmented reality', 'mixed reality', 'mr', 'ホロレンズ', 'hololens'],
+      
+      // 人間工学・安全関連
+      'エラー': ['ヒューマンエラー', 'sherpa', '作業エラー', '事故防止', 'iot', 'スリップ', 'ラプス', 'ミステーク', 'human error', 'error prevention'],
+      '高齢者': ['高齢', 'ユニバーサルデザイン', '認知機能', '加齢', 'タブレット', 'elderly', 'シニア', '高齢化', '老化', '加齢変化'],
+      '航空': ['航空安全', 'asrs', 'レジリエンス', 'コンピテンス', '緊急着水', '航空管制', 'atc', 'パイロット', 'フライト', 'aviation'],
+      'チーム': ['チームワーク', '協調', '航空管制', 'コミュニケーション', 'human factors', 'チーム連携', 'collaboration', '共同作業'],
+      '安全': ['安全人間工学', '危険予知', '事故防止', 'heinrich', 'ヒヤリハット', 'リスク評価', 'safety', '安全性', '事故分析'],
+      
+      // 感性・評価手法関連
+      '感性': ['感性工学', 'kansei', 'sd法', 'semantic differential', 'ahp', 'analytic hierarchy process', 'kj法', '官能評価', '主観評価'],
+      
+      // 統計・解析手法関連
+      '統計': ['相関', '回帰', '分散分析', 'anova', 't検定', 'カイ二乗', 'chi-square', 'spss', 'r言語', 'python', '機械学習', 'svm', 'random forest'],
+      '機械学習': ['machine learning', 'ai', '人工知能', 'neural network', 'deep learning', 'svm', 'random forest', 'classification', '分類', '予測'],
+      
+      // 生体力学関連
+      '生体力学': ['biomechanics', '姿勢', 'posture', '動作解析', 'motion analysis', '筋骨格', 'kinematic', 'kinetic', 'force plate', 'フォースプレート'],
+      '姿勢': ['posture', '体位', '立位', '座位', '歩行', 'gait', '重心', 'center of gravity', 'バランス', '平衡'],
+      
+      // 環境・照明関連
+      '照明': ['lighting', '照度', 'lux', '色温度', '演色性', 'led', 'ブルーライト', 'blue light', '視覚疲労', '明度', '輝度'],
+      '環境': ['environment', '温度', '湿度', '騒音', 'noise', '照明', 'lighting', 'ergonomics', '人間工学的環境']
     }
     
     // キーワード拡張
@@ -531,40 +614,80 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
       const lowerTitle = doc.metadata.title.toLowerCase()
       const lowerAuthor = doc.metadata.author?.toLowerCase() || ''
       
-      // 複数レベルのスコアリング
+      // 高精度多層スコアリングシステム
       let score = 0
       let matchedKeywords: string[] = []
       
       finalKeywords.forEach(keyword => {
         const keywordLower = keyword.toLowerCase()
         
-        // 著者名マッチ（最高得点）
-        if (lowerAuthor.includes(keywordLower) || keywordLower.includes(lowerAuthor)) {
-          score += 15
-          matchedKeywords.push(`著者:${keyword}`)
+        // 著者名マッチ（最高得点 - 完全一致は特に高得点）
+        if (lowerAuthor) {
+          if (lowerAuthor === keywordLower) {
+            score += 25  // 完全一致
+            matchedKeywords.push(`著者完全一致:${keyword}`)
+          } else if (lowerAuthor.includes(keywordLower) || keywordLower.includes(lowerAuthor)) {
+            score += 15  // 部分一致
+            matchedKeywords.push(`著者部分一致:${keyword}`)
+          }
         }
         
-        // タイトルマッチ（高得点）
+        // タイトルマッチ（高得点 - 技術用語は特に高得点）
         if (lowerTitle.includes(keywordLower)) {
-          score += 8
-          matchedKeywords.push(`タイトル:${keyword}`)
+          // 技術用語（英語・専門用語）の場合は高得点
+          const isTechTerm = /^[a-z]+$/.test(keywordLower) && keywordLower.length > 2
+          const isJapaneseTech = ['生理指標', 'ユーザビリティ', '認知負荷', '開眼安静', '脳波', '筋電図'].includes(keyword)
+          
+          if (isTechTerm || isJapaneseTech) {
+            score += 12  // 技術用語タイトル一致
+            matchedKeywords.push(`タイトル技術用語:${keyword}`)
+          } else {
+            score += 8   // 通常のタイトル一致
+            matchedKeywords.push(`タイトル:${keyword}`)
+          }
         }
         
-        // 本文での複数回出現チェック
+        // 本文での戦略的スコアリング
         const contentMatches = (lowerContent.match(new RegExp(keywordLower, 'g')) || []).length
         if (contentMatches > 0) {
-          // 複数回出現する場合は高得点
-          score += contentMatches > 2 ? 5 : contentMatches > 1 ? 3 : 1
-          matchedKeywords.push(`本文:${keyword}(${contentMatches}回)`)
+          let contentScore = 0
+          
+          // 基本スコア（出現回数ベース）
+          if (contentMatches >= 5) contentScore += 7      // 頻出（5回以上）
+          else if (contentMatches >= 3) contentScore += 5  // 多出現（3-4回）
+          else if (contentMatches >= 2) contentScore += 3  // 複数出現（2回）
+          else contentScore += 1                           // 単一出現
+          
+          // 技術用語ボーナス
+          const isTechTerm = /^[a-z]+$/.test(keywordLower) && keywordLower.length > 2
+          const isJapaneseTech = ['生理指標', 'ユーザビリティ', '認知負荷', '開眼安静', 'fnirs', 'eye-tracking'].includes(keyword)
+          if (isTechTerm || isJapaneseTech) {
+            contentScore += 3  // 技術用語ボーナス
+            matchedKeywords.push(`本文技術用語:${keyword}(${contentMatches}回)`)
+          } else {
+            matchedKeywords.push(`本文:${keyword}(${contentMatches}回)`)
+          }
+          
+          score += contentScore
         }
       })
+      
+      // 研究分野一致ボーナス（同じ分野の複数キーワードがマッチした場合）
+      const fieldKeywordCount = finalKeywords.filter(k => 
+        lowerContent.includes(k.toLowerCase()) || lowerTitle.includes(k.toLowerCase())
+      ).length
+      
+      if (fieldKeywordCount >= 3) {
+        score += 5  // 分野統合性ボーナス
+        matchedKeywords.push(`分野統合ボーナス(${fieldKeywordCount}キーワード)`)
+      }
       
       // デバッグ情報保存
       if (score > 0) {
         doc.searchScore = score
         doc.matchDetails = matchedKeywords
-        console.log(`マッチ文書: ${doc.metadata.title} (著者: ${doc.metadata.author}) - スコア: ${score}`)
-        console.log(`  マッチ詳細: ${matchedKeywords.join(', ')}`)
+        console.log(`マッチ文書: ${doc.metadata.title} (著者: ${doc.metadata.author}) - 総合スコア: ${score}`)
+        console.log(`  詳細: ${matchedKeywords.join(', ')}`)
       }
       
       return score > 0
