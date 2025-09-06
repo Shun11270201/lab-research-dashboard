@@ -62,11 +62,16 @@ export default function ChatBotInterface() {
   useEffect(() => {
     // Load existing knowledge base on mount
     loadKnowledgeBase()
+    // 軽い再取得（CDN整合を考慮）
+    const t1 = setTimeout(() => loadKnowledgeBase(true), 8000)
+    const t2 = setTimeout(() => loadKnowledgeBase(true), 20000)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
   }, [])
 
-  const loadKnowledgeBase = async () => {
+  const loadKnowledgeBase = async (noStore = false) => {
     try {
-      const response = await fetch('/api/knowledge-base')
+      const url = `/api/knowledge-base?ts=${Date.now()}`
+      const response = await fetch(url, { cache: noStore ? 'no-store' : 'default' })
       if (response.ok) {
         const data = await response.json()
         const docs = (data.documents || []).map((d: any) => ({
@@ -440,6 +445,12 @@ export default function ChatBotInterface() {
             <p className="text-sm text-gray-400 mt-1">
               学習済み資料: {knowledgeBase.filter(doc => doc.status === 'ready').length}件
             </p>
+            <button
+              onClick={() => loadKnowledgeBase(true)}
+              className="mt-2 text-xs text-green-400 hover:text-green-300"
+            >
+              再読み込み
+            </button>
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
