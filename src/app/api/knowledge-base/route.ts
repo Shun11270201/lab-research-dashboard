@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { kv } from '@vercel/kv'
-import { readMetadata } from '../../../lib/blobStore'
+import { readMetadata, readAllDocuments } from '../../../lib/blobStore'
 import { getDocumentsAsync } from '../../../lib/knowledgeStore'
 
 export const dynamic = 'force-dynamic'
@@ -27,8 +27,25 @@ const kvEnabled = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKE
 
 export async function GET() {
   try {
-    // Collect from Blob metadata (if any)
+    // Collect from Blob sharded docs first (if any)
     const combined = new Map<string, StoredDocument>()
+    try {
+      const shardDocs = await readAllDocuments()
+      if (Array.isArray(shardDocs) && shardDocs.length > 0) {
+        for (const d of shardDocs) {
+          combined.set(d.id, {
+            id: d.id,
+            name: d.name,
+            type: d.type,
+            uploadedAt: d.uploadedAt,
+            status: d.status,
+            content: d.content,
+            author: d.author,
+          })
+        }
+      }
+    } catch {}
+    // Then merge from legacy metadata.json for backward compatibility
     try {
       const meta = await readMetadata()
       if (meta && Array.isArray(meta.documents)) {

@@ -5,7 +5,7 @@ import { upsertDocumentByNameAsync, updateDocumentAsync } from '../../../../lib/
 import { preprocessText, inferAuthor } from '../../../../lib/textUtil'
 import { storeDocVectors } from '../../../../lib/vectorStore'
 import { kv } from '@vercel/kv'
-import { upsertDocument as upsertBlobDocument } from '../../../../lib/blobStore'
+import { upsertDocument as upsertBlobDocument, upsertDocumentShard as upsertBlobShard } from '../../../../lib/blobStore'
 const kvEnabled = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN)
 
 export const dynamic = 'force-dynamic'
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
 
         // Persist into Blob metadata (optional, works without KV)
         try {
-          await upsertBlobDocument({
+          const blobDoc = {
             id: doc.id,
             name,
             type: 'thesis',
@@ -87,7 +87,10 @@ export async function POST(req: NextRequest) {
             status: 'ready',
             content: text,
             author,
-          })
+          } as const
+          // Write shard to avoid lost updates; keep legacy metadata update best-effort
+          await upsertBlobShard(blobDoc)
+          await upsertBlobDocument(blobDoc)
         } catch (e) {
           // Blob persist error is non-fatal
         }

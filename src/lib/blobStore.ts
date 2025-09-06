@@ -56,3 +56,43 @@ export async function upsertDocument(doc: BlobStoredDocument) {
   }
   await writeMetadata({ documents: docs })
 }
+
+// Sharded document storage to avoid lost-update on metadata.json
+const DOCS_PREFIX = 'kb/docs/'
+const docPath = (id: string) => `${DOCS_PREFIX}${id}.json`
+
+export async function upsertDocumentShard(doc: BlobStoredDocument) {
+  await put(docPath(doc.id), JSON.stringify(doc), {
+    contentType: 'application/json',
+    access: 'public',
+    addRandomSuffix: false,
+  })
+}
+
+export async function readAllDocuments(): Promise<BlobStoredDocument[]> {
+  try {
+    const { blobs } = await list({ prefix: DOCS_PREFIX })
+    if (!blobs || blobs.length === 0) return []
+    const results: BlobStoredDocument[] = []
+    // Fetch in limited parallelism to be safe
+    const concurrency = 5
+    let i = 0
+    async function worker() {
+      while (i < blobs.length) {
+        const b = blobs[i++]
+        try {
+          const u = `${b.url}${b.url.includes('?') ? '&' : '?'}ts=${Date.now()}`
+          const res = await fetch(u, { cache: 'no-store' })
+          if (res.ok) {
+            const j = await res.json()
+            results.push(j as BlobStoredDocument)
+          }
+        } catch {}
+      }
+    }
+    await Promise.all(Array.from({ length: concurrency }, () => worker()))
+    return results
+  } catch {
+    return []
+  }
+}
