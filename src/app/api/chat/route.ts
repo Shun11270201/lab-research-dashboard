@@ -32,6 +32,7 @@ interface KnowledgeDocument {
     author?: string
     year?: number
   }
+  searchScore?: number // 検索スコア用フィールド
 }
 
 
@@ -39,15 +40,23 @@ export async function POST(req: NextRequest) {
   try {
     // Ensure proper text decoding for Japanese characters
     const body = await req.text()
+    console.log('Received request body:', body.substring(0, 200))
+    
     const { message, searchMode, history } = JSON.parse(body)
     
-    if (!message) {
+    if (!message?.trim()) {
+      console.error('Empty or invalid message received')
       return NextResponse.json({ error: 'Message is required' }, { status: 400 })
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-      console.error('OPENAI_API_KEY is not set in environment variables')
-      return NextResponse.json({ error: 'OpenAI API key not configured. Please add OPENAI_API_KEY to Vercel environment variables.' }, { status: 500 })
+    const apiKey = process.env.OPENAI_API_KEY
+    if (!apiKey || apiKey === 'your_openai_api_key_here') {
+      console.error('OPENAI_API_KEY is not properly set in environment variables')
+      console.error('Current OPENAI_API_KEY value:', apiKey ? `${apiKey.substring(0, 10)}...` : 'undefined')
+      return NextResponse.json({ 
+        error: 'OpenAI API key not configured. Please set OPENAI_API_KEY in Vercel environment variables.',
+        details: 'The API key is missing or using placeholder value'
+      }, { status: 500 })
     }
 
     // 関連する知識を検索（より多くの文書を取得）
@@ -100,33 +109,27 @@ export async function POST(req: NextRequest) {
       content: msg.content
     })) || []
 
-    // システムプロンプト
-    const systemPrompt = `あなたは中西研究室の人間工学専門AIアシスタントです。以下の実際の研究データベースに基づいて回答してください。
+    // 簡潔で効果的なシステムプロンプト
+    const systemPrompt = `あなたは中西研究室のRAGアシスタントです。以下の研究データに基づいて回答してください。
 
-【最重要】以下の研究情報を必ず使用して回答してください：
+【利用可能な研究データ】
 ${context}
 
-【絶対的指示】
-1. **上記のデータベース内容を必ず使用**：上記のデータは実際の中西研究室の修士論文データです
-2. **研究者質問への対応**：特定の研究者について聞かれた場合、上記データベースから該当する研究を探して詳細に説明してください
-3. **データが見つからない場合**：研究者名が上記データベースにない場合のみ「データベース内に該当する研究が見つかりません」と回答
-4. **具体的内容の提示**：研究内容、手法、結果を上記データベースから正確に引用
+【回答指針】
+1. 上記データの内容を正確に使用して回答
+2. 具体的な研究内容（手法・結果・技術）を詳しく説明
+3. 該当研究がない場合は「該当する研究が見つかりません」と回答
+4. 出典を必ず明記：[著者名]「[タイトル]」(年度)
 
-【回答必須要素】
-- 研究者名と研究タイトル
-- 研究の具体的内容（手法、結果、技術など）
-- 参考研究の明記
+【回答形式】
+- 研究者名・タイトルの明記
+- 研究内容の詳細説明
+- 参考文献の記載
 
-【例】小野さんについて質問された場合：
-上記データベースに小野さんの研究がある場合は、その研究内容（研究テーマ、手法、結果など）を詳細に説明してください。
-
-【出典明記（必須）】
-回答に使用した研究は以下の形式で必ず明記：
-参考研究：[著者名]「[論文タイトル]」([年度])
-
-上記データベースの情報のみを使用し、推測や一般知識は使用しないでください。`
+簡潔で分かりやすく回答してください。`
 
     // OpenAI APIを呼び出し
+    console.log('OpenAI API 呼び出し開始...')
     const response = await getOpenAI().chat.completions.create({
       model: 'gpt-4o',
       messages: [
@@ -134,18 +137,30 @@ ${context}
         ...conversationHistory,
         { role: 'user', content: message }
       ],
-      temperature: 0.7,
-      max_tokens: 2000
+      temperature: 0.3, // より一貫した回答のため低く設定
+      max_tokens: 1500, // レスポンス時間短縮のため削減
+      stream: false
     })
 
-    const aiResponse = response.choices[0]?.message?.content || ''
+    const aiResponse = response.choices[0]?.message?.content?.trim() || ''
+    console.log('OpenAI APIレスポンス長:', aiResponse.length)
+    
+    // 空のレスポンスチェック
+    if (!aiResponse) {
+      console.error('OpenAI APIから空のレスポンスを受信')
+      return NextResponse.json({
+        error: 'AIからの回答が空です。もう一度お試しください。'
+      }, { status: 500 })
+    }
     
     // 使用したソースを特定
-    const sources = relevantKnowledge.map(doc => doc.metadata.title)
+    const sources = relevantKnowledge.map(doc => `${doc.metadata.author}「${doc.metadata.title}」(${doc.metadata.year})`)
 
+    console.log('成功レスポンス送信:', { responseLength: aiResponse.length, sourcesCount: sources.length })
+    
     return NextResponse.json({
       response: aiResponse,
-      sources: sources.length > 0 ? sources : null
+      sources: sources.length > 0 ? sources : []
     }, {
       headers: {
         'Content-Type': 'application/json; charset=utf-8'
@@ -154,10 +169,26 @@ ${context}
 
   } catch (error) {
     console.error('Chat API error:', error)
-    return NextResponse.json(
-      { error: 'Chat processing failed' }, 
-      { status: 500 }
-    )
+    
+    // Enhanced error handling with specific error types
+    if (error instanceof Error) {
+      if (error.message.includes('API key')) {
+        return NextResponse.json({
+          error: 'OpenAI API authentication failed',
+          details: 'Please check your API key configuration'
+        }, { status: 401 })
+      } else if (error.message.includes('quota') || error.message.includes('billing')) {
+        return NextResponse.json({
+          error: 'OpenAI API quota exceeded',
+          details: 'Please check your OpenAI billing and usage limits'
+        }, { status: 402 })
+      }
+    }
+    
+    return NextResponse.json({
+      error: 'Chat processing failed',
+      details: process.env.NODE_ENV === 'development' ? error?.toString() : 'Internal server error'
+    }, { status: 500 })
   }
 }
 
@@ -218,142 +249,60 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
   // Load actual thesis documents
   const knowledgeBase = await loadThesisData(req)
   
-  console.log('=== 検索開始 ===')
+  console.log('=== 知識ベース検索 ===')
   console.log(`クエリ: "${query}"`)
   console.log(`検索モード: ${searchMode}`)
   console.log(`利用可能な文書数: ${knowledgeBase.length}`)
   
   if (knowledgeBase.length === 0) {
-    console.warn('No thesis data loaded for search')
+    console.warn('知識ベースが空です')
     return []
   }
   
-  // 小野さん関連のクエリの場合、利用可能な文書をチェック
-  if (query.toLowerCase().includes('小野')) {
-    const onoDocuments = knowledgeBase.filter(doc => 
-      doc.metadata.author?.includes('小野') || 
-      doc.content.toLowerCase().includes('小野') ||
-      doc.metadata.title.toLowerCase().includes('小野')
-    )
-    console.log(`小野さん関連の利用可能文書数: ${onoDocuments.length}`)
-    onoDocuments.forEach((doc, index) => {
-      console.log(`  文書${index + 1}: ${doc.metadata.title} (著者: ${doc.metadata.author})`)
-    })
-  }
+  // 効率的なキーワード検索（人名・技術用語を優先）
+  const keywords = query.toLowerCase().split(/[\s、，。！？]+/).filter(k => k.length > 0)
+  console.log(`検索キーワード: [${keywords.join(', ')}]`)
   
-  if (searchMode === 'keyword') {
-    // キーワード検索
-    console.log('=== キーワード検索実行中 ===')
-    const keywords = query.toLowerCase().split(/\s+/)
-    console.log(`キーワード: [${keywords.join(', ')}]`)
+  const results = knowledgeBase.filter(doc => {
+    const lowerContent = doc.content.toLowerCase()
+    const lowerTitle = doc.metadata.title.toLowerCase()
+    const lowerAuthor = doc.metadata.author?.toLowerCase() || ''
     
-    const results = knowledgeBase.filter(doc => 
-      keywords.some(keyword => {
-        const lowerContent = doc.content.toLowerCase()
-        const lowerTitle = doc.metadata.title.toLowerCase()
-        const lowerAuthor = doc.metadata.author?.toLowerCase()
-        
-        // 通常の部分マッチ
-        const contentMatch = lowerContent.includes(keyword)
-        const titleMatch = lowerTitle.includes(keyword)
-        let authorMatch = false
-        
-        // 作者名での双方向マッチング（「小野真子」→「小野」、「小野」→「小野真子」）
-        if (lowerAuthor) {
-          authorMatch = lowerAuthor.includes(keyword) || keyword.includes(lowerAuthor)
-        }
-        
-        const hasMatch = contentMatch || titleMatch || authorMatch
-        
-        // デバッグ出力（小野さんの場合のみ）
-        if (keyword.includes('小野') && hasMatch) {
-          console.log(`マッチした文書: ${doc.metadata.title}`)
-          console.log(`  著者: ${doc.metadata.author}`)
-          console.log(`  contentMatch: ${contentMatch}`)
-          console.log(`  titleMatch: ${titleMatch}`)
-          console.log(`  authorMatch: ${authorMatch}`)
-        }
-        
-        return hasMatch
-      })
-    )
+    // 優先度付き検索
+    let score = 0
     
-    console.log(`キーワード検索結果: ${results.length}件`)
-    console.log('========================')
-    return results
-  } else {
-    // セマンティック検索（改良版：まず関連文書を絞り込み、その後セマンティック検索）
-    try {
-      // Step 1: キーワードベースで候補を絞り込み（高速）
-      const keywords = query.toLowerCase().split(/\s+/)
-      let candidates = knowledgeBase
-      
-      // 人名や専門用語での事前フィルタリング
-      const nameKeywords = keywords.filter(k => /^[ぁ-ゖァ-ヺ一-龯]{2,10}$/.test(k))
-      const technicalKeywords = keywords.filter(k => k.length > 2)
-      
-      if (nameKeywords.length > 0 || technicalKeywords.length > 0) {
-        candidates = knowledgeBase.filter(doc => {
-          const lowerContent = doc.content.toLowerCase()
-          const lowerTitle = doc.metadata.title.toLowerCase()
-          const lowerAuthor = doc.metadata.author?.toLowerCase()
-          
-          // 人名での強いマッチング
-          const nameMatch = nameKeywords.some(name => {
-            if (lowerAuthor) {
-              return lowerAuthor.includes(name) || name.includes(lowerAuthor) || 
-                     lowerTitle.includes(name) || lowerContent.includes(name)
-            }
-            return lowerTitle.includes(name) || lowerContent.includes(name)
-          })
-          
-          // 技術用語での関連性チェック
-          const techMatch = technicalKeywords.some(tech => 
-            lowerContent.includes(tech) || lowerTitle.includes(tech)
-          )
-          
-          return nameMatch || techMatch || 
-                 keywords.some(k => lowerContent.includes(k) || lowerTitle.includes(k))
-        })
-        
-        console.log(`Filtered candidates from ${knowledgeBase.length} to ${candidates.length}`)
+    keywords.forEach(keyword => {
+      // 著者名での完全・部分マッチ（高得点）
+      if (lowerAuthor.includes(keyword) || keyword.includes(lowerAuthor)) {
+        score += 10
       }
       
-      // Step 2: 候補が多すぎる場合はキーワード検索、少ない場合はセマンティック検索
-      if (candidates.length > 10) {
-        // 多い場合は高速なキーワードベース検索
-        console.log('Using fast keyword-based search due to many candidates')
-        return candidates
-          .slice(0, 5) // 上位5件
-      } else if (candidates.length > 0) {
-        // 適度な候補数でセマンティック検索を実行
-        console.log(`Performing semantic search on ${candidates.length} candidates`)
-        const queryEmbedding = await generateEmbedding(query)
-        
-        const scoredDocs = await Promise.all(
-          candidates.map(async (doc) => {
-            const docEmbedding = await generateEmbedding(doc.content.substring(0, 4000)) // 長い文書は要約
-            const similarity = cosineSimilarity(queryEmbedding, docEmbedding)
-            return { doc, similarity }
-          })
-        )
-        
-        return scoredDocs
-          .sort((a, b) => b.similarity - a.similarity)
-          .slice(0, 5) // 上位5件
-          .filter(item => item.similarity > 0.1)
-          .map(item => item.doc)
-      } else {
-        // 候補が少ない場合は全文書を対象にキーワード検索
-        console.log('No specific candidates found, falling back to broad keyword search')
-        return searchKnowledge(query, 'keyword', req)
+      // タイトルでのマッチ（中得点）
+      if (lowerTitle.includes(keyword)) {
+        score += 5
       }
-        
-    } catch (error) {
-      console.error('Semantic search error:', error)
-      return searchKnowledge(query, 'keyword', req)
-    }
-  }
+      
+      // 本文でのマッチ（低得点）
+      if (lowerContent.includes(keyword)) {
+        score += 1
+      }
+    })
+    
+    doc.searchScore = score
+    return score > 0
+  })
+  
+  // スコア順にソートして上位5件を返す
+  const sortedResults = results
+    .sort((a, b) => (b.searchScore || 0) - (a.searchScore || 0))
+    .slice(0, 5)
+  
+  console.log(`検索結果: ${sortedResults.length}件`)
+  sortedResults.forEach((doc, index) => {
+    console.log(`  ${index + 1}. ${doc.metadata.title} (著者: ${doc.metadata.author}) - スコア: ${doc.searchScore}`)
+  })
+  
+  return sortedResults
 }
 
 async function generateEmbedding(text: string): Promise<number[]> {

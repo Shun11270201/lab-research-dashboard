@@ -8,6 +8,7 @@ export interface KnowledgeDocument {
     author?: string
     year?: number
   }
+  searchScore?: number // 検索スコア用フィールド追加
 }
 
 export const knowledgeBase: KnowledgeDocument[] = [

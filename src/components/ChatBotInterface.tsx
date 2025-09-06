@@ -39,7 +39,7 @@ export default function ChatBotInterface() {
     {
       id: '1',
       role: 'assistant',
-      content: 'こんにちは！中西研究室のRAG ChatBotです。\n\n📚 **既に読み込み済みの人間工学研究（38件）：**\n・認知工学（Eye-tracking、fNIRS、認知負荷測定）\n・ユーザビリティ評価（SD法、AHP、感性工学）\n・VR・空間認知（HMD、距離知覚、モーションキャプチャ）\n・ヒューマンエラー（SHERPA、IoT監視、事故防止）\n・高齢者インターフェース（認知機能、ユニバーサルデザイン）\n・疲労・ストレス評価（VAS、生理指標、VDT作業）\n・チームワーク（航空管制、コミュニケーション分析）\n・安全人間工学（危険予知、機械学習、リスク評価）\n・作業姿勢・生体力学・音響心理学・感性評価など\n\n🔬 これらの豊富な人間工学研究について、お気軽に質問してください！実験手法、測定技術、設計指針まで詳しく説明いたします。',
+      content: '🤖 こんにちは！中西研究室のRAG ChatBotです。\n\n📚 **38件の人間工学研究データ**を学習済みです：\n• 小野真子さんの航空安全研究\n• 認知工学・ユーザビリティ評価\n• VR・空間認知研究\n• ヒューマンエラー分析\n• 高齢者インターフェース設計\n• その他多数の実修論データ\n\n💬 研究者名や研究テーマについて何でもお聞きください！',
       timestamp: new Date(),
     }
   ])
@@ -49,6 +49,7 @@ export default function ChatBotInterface() {
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase[]>([])
   const [showSettings, setShowSettings] = useState(false)
   const [searchMode, setSearchMode] = useState<'semantic' | 'keyword'>('semantic')
+  const [systemStatus, setSystemStatus] = useState<any>(null)
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -58,9 +59,27 @@ export default function ChatBotInterface() {
   }, [messages])
 
   useEffect(() => {
-    // Load existing knowledge base on mount
+    // Load existing knowledge base and system status on mount
     loadKnowledgeBase()
+    checkSystemStatus()
   }, [])
+
+  const checkSystemStatus = async () => {
+    try {
+      const response = await fetch('/api/health')
+      if (response.ok) {
+        const status = await response.json()
+        setSystemStatus(status)
+        console.log('System status:', status)
+        
+        if (!status.openai_api_key_configured) {
+          console.warn('OpenAI API key not configured properly')
+        }
+      }
+    } catch (error) {
+      console.error('Failed to check system status:', error)
+    }
+  }
 
   const loadKnowledgeBase = async () => {
     try {
@@ -119,10 +138,25 @@ export default function ChatBotInterface() {
       setMessages(prev => [...prev, assistantMessage])
 
     } catch (error) {
+      console.error('Chat request failed:', error)
+      
+      let errorContent = '申し訳ございません。エラーが発生しました。'
+      
+      // Simple error handling
+      if (error instanceof Error) {
+        if (error.message.includes('fetch')) {
+          errorContent = '🌐 ネットワーク接続に問題があります。インターネット接続を確認してください。'
+        } else if (error.message.includes('timeout')) {
+          errorContent = '⏱️ 処理がタイムアウトしました。もう一度お試しください。'
+        } else {
+          errorContent = '🔧 システムエラーが発生しました。しばらく時間をおいてから再試行してください。'
+        }
+      }
+
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: '申し訳ありませんが、エラーが発生しました。もう一度お試しください。',
+        content: errorContent,
         timestamp: new Date()
       }
       setMessages(prev => [...prev, errorMessage])
@@ -251,7 +285,7 @@ export default function ChatBotInterface() {
             <div className="p-6 glass-effect border-b border-white/10 animate-slide-up">
               <h3 className="text-lg font-semibold mb-4">検索設定</h3>
               
-              <div className="flex gap-4">
+              <div className="flex gap-4 mb-4">
                 <label className="flex items-center gap-2">
                   <input
                     type="radio"
@@ -272,6 +306,37 @@ export default function ChatBotInterface() {
                   <span className="text-sm">キーワード検索（高速）</span>
                 </label>
               </div>
+              
+              {/* System Status */}
+              {systemStatus && (
+                <div className="p-3 bg-gray-800 rounded-lg text-xs">
+                  <h4 className="font-semibold mb-2">システム状態</h4>
+                  <div className="space-y-1">
+                    <div className="flex justify-between">
+                      <span>OpenAI API:</span>
+                      <span className={systemStatus.openai_api_key_configured ? 'text-green-400' : 'text-red-400'}>
+                        {systemStatus.openai_api_key_configured ? '✓ 設定済み' : '❌ 未設定'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>環境:</span>
+                      <span>{systemStatus.environment}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Vercel:</span>
+                      <span className={systemStatus.vercel ? 'text-green-400' : 'text-gray-400'}>
+                        {systemStatus.vercel ? '✓' : '❌'}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  {!systemStatus.openai_api_key_configured && (
+                    <div className="mt-2 p-2 bg-red-900/20 border border-red-500/30 rounded text-red-300">
+                      <p className="text-xs">⚠️ OpenAI APIキーが設定されていません。Vercelの環境変数でOPENAI_API_KEYを設定してください。</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
