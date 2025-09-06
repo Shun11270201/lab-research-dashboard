@@ -22,7 +22,9 @@ export async function readMetadata(): Promise<BlobMetadata | null> {
     const { blobs } = await list({ prefix: 'kb/' })
     const meta = blobs.find(b => b.pathname === META_PATH)
     if (!meta) return { documents: [] }
-    const res = await fetch(meta.url, { cache: 'no-store' })
+    // Avoid CDN stale cache by appending timestamp
+    const url = `${meta.url}${meta.url.includes('?') ? '&' : '?'}ts=${Date.now()}`
+    const res = await fetch(url, { cache: 'no-store' })
     if (!res.ok) return { documents: [] }
     return await res.json()
   } catch (e) {
@@ -54,4 +56,3 @@ export async function upsertDocument(doc: BlobStoredDocument) {
   }
   await writeMetadata({ documents: docs })
 }
-
