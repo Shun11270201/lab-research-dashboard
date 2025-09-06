@@ -342,7 +342,37 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
     })
   }
   
+  // 人名を強く指定するガード（クエリに人名らしき漢字2-6文字が含まれ、DB内に該当著者がいる場合は著者一致の文書に限定）
+  try {
+    const nameTokens = (query.match(/[一-龯]{2,6}/g) || [])
+    if (nameTokens.length > 0) {
+      const lowerNames = nameTokens
+      const authorMatched = knowledgeBase.filter(doc => {
+        const a = (doc.metadata.author || '')
+        return lowerNames.some(n => a.includes(n))
+      })
+      if (authorMatched.length > 0) {
+        console.log(`Author-guard active: limiting to ${authorMatched.length} docs by names [${nameTokens.join(', ')}]`)
+        return searchWithin(authorMatched)
+      }
+    }
+  } catch {}
+
+  function searchWithin(base: KnowledgeDocument[]): Promise<KnowledgeDocument[]> {
+    if (searchMode === 'keyword') {
+      return keywordSearch(base)
+    } else {
+      return semanticSearch(base)
+    }
+  }
+
   if (searchMode === 'keyword') {
+    return keywordSearch(knowledgeBase)
+  } else {
+    return semanticSearch(knowledgeBase)
+  }
+
+  async function keywordSearch(base: KnowledgeDocument[]): Promise<KnowledgeDocument[]> {
     // キーワード検索
     console.log('=== キーワード検索実行中 ===')
     const baseKeywords = query.toLowerCase().split(/\s+/).filter(Boolean)
@@ -350,7 +380,7 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
     const keywords = Array.from(new Set([...baseKeywords, ...kanjiTokens]))
     console.log(`キーワード: [${keywords.join(', ')}]`)
     
-    const results = knowledgeBase.filter(doc => 
+    const results = base.filter(doc => 
       keywords.some(keyword => {
         const lowerContent = doc.content.toLowerCase()
         const lowerTitle = doc.metadata.title.toLowerCase()
@@ -384,14 +414,16 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
     console.log(`キーワード検索結果: ${results.length}件`)
     console.log('========================')
     return results
-  } else {
+  }
+
+  async function semanticSearch(base: KnowledgeDocument[]): Promise<KnowledgeDocument[]> {
     // セマンティック検索（改良版：まず関連文書を絞り込み、その後セマンティック検索）
     try {
       // Step 1: キーワードベースで候補を絞り込み（高速）
       const baseKeywords = query.toLowerCase().split(/\s+/).filter(Boolean)
       const kanjiTokens = (query.match(/[一-龯]{2,3}/g) || [])
       const keywords = Array.from(new Set([...baseKeywords, ...kanjiTokens]))
-      let candidates = knowledgeBase
+      let candidates = base
       
       // 人名や専門用語での事前フィルタリング
       const nameKeywords = keywords.filter(k => /^[ぁ-ゖァ-ヺ一-龯]{2,10}$/.test(k))
@@ -469,7 +501,7 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
         
     } catch (error) {
       console.error('Semantic search error:', error)
-      return searchKnowledge(query, 'keyword', req)
+      return keywordSearch(base)
     }
   }
 }
