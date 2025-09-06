@@ -247,35 +247,47 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
             metadata: { title: d.name, type: d.type as any, author: d.author, year: undefined }
           })
         })
-      } else {
-        throw new Error('Blob shards empty')
       }
     } catch (e) {
       console.warn('Failed to load blob shard metadata, falling back to legacy/store:', e)
-      try {
-        const meta = await readMetadata()
-        if (meta && Array.isArray(meta.documents)) {
-          meta.documents.forEach(d => {
+    }
+
+    // Always merge legacy metadata.json as well (docs that were uploaded via UI route)
+    try {
+      const ids = new Set(thesisData.map(d => d.id))
+      const meta = await readMetadata()
+      if (meta && Array.isArray(meta.documents)) {
+        meta.documents.forEach(d => {
+          if (!ids.has(d.id)) {
             const body = (d.content || '').trim()
             thesisData.push({
               id: d.id,
               content: body.length > 0 ? body : `【メタデータのみ】本文抽出不可のためファイル名を記載: ${d.name}`,
               metadata: { title: d.name, type: d.type as any, author: d.author, year: undefined }
             })
-          })
-        }
-        const uploaded = await getDocumentsAsync()
-        uploaded.forEach(d => {
+          }
+        })
+      }
+    } catch (e) {
+      console.warn('Legacy blob metadata merge skipped:', e)
+    }
+
+    // Finally merge in-memory/dev store as ultimate fallback
+    try {
+      const ids = new Set(thesisData.map(d => d.id))
+      const uploaded = await getDocumentsAsync()
+      uploaded.forEach(d => {
+        if (!ids.has(d.id)) {
           const body = (d.content || '').trim()
           thesisData.push({
             id: d.id,
             content: body.length > 0 ? body : `【メタデータのみ】本文抽出不可のためファイル名を記載: ${d.name}`,
             metadata: { title: d.name, type: d.type, author: d.author, year: undefined }
           })
-        })
-      } catch (ee) {
-        console.warn('Fallback store merge failed:', ee)
-      }
+        }
+      })
+    } catch (ee) {
+      console.warn('Fallback store merge failed:', ee)
     }
     
     // キャッシュを更新
