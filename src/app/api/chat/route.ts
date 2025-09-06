@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
     // 上限: 上位3件・各4,000文字までに制限してトークン超過を防止
     const MAX_DOCS = 3
     const MAX_CHARS_PER_DOC = 4000
-    const limitedDocs = relevantKnowledge.slice(0, MAX_DOCS)
+    const limitedDocs = finalRelevantKnowledge.slice(0, MAX_DOCS)
     const context = limitedDocs.map(doc => {
       const authorInfo = doc.metadata.author ? `（著者：${doc.metadata.author}）` : ''
       const yearInfo = doc.metadata.year ? `（${doc.metadata.year}年度）` : ''
@@ -104,12 +104,47 @@ export async function POST(req: NextRequest) {
     
     console.log(`Found ${relevantKnowledge.length} relevant documents for query: "${message}"`)
     
+    // 検索結果の信頼性チェック
+    if (relevantKnowledge.length === 0) {
+      console.warn('検索結果が0件：データにない質問の可能性')
+      return NextResponse.json({
+        response: `申し訳ありませんが、「${message}」に関する情報は、現在利用可能な研究データには含まれていません。\n\n中西研究室には他にも多くの研究がありますので、以下をお試しください：\n- より具体的な研究手法や分野での検索\n- 研究者名での検索\n- 異なるキーワードでの検索\n\n何かほかにお手伝いできることがあれば、お気軽にお尋ねください。`,
+        sources: []
+      }, {
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8'
+        }
+      })
+    }
+    
+    // 関連性スコアのチェック（低品質な結果を除外）
+    const highQualityResults = relevantKnowledge.filter(doc => 
+      doc.searchScore === undefined || doc.searchScore >= 5
+    )
+    
+    if (highQualityResults.length === 0) {
+      console.warn('高品質な検索結果が0件：関連性が低い可能性')
+      return NextResponse.json({
+        response: `「${message}」に関して、部分的に関連する可能性のある研究は見つかりましたが、直接的な関連性は低いようです。\n\nより具体的な質問や、異なる角度からのお尋ねをしていただけますでしょうか。例えば：\n- 特定の研究手法（EEG、Eye-tracking等）について\n- 特定の研究者名について\n- より広い研究分野について\n\nお手伝いできるよう努めます。`,
+        sources: []
+      }, {
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8'
+        }
+      })
+    }
+    
+    // 高品質な結果のみを使用
+    const finalRelevantKnowledge = highQualityResults.length > 0 ? highQualityResults : relevantKnowledge.slice(0, 1)
+    
+    console.log(`使用する高品質文書数: ${finalRelevantKnowledge.length}`)
+    
     // 小野さんに関するクエリの場合、詳細デバッグ
     if (message.toLowerCase().includes('小野')) {
       console.log('=== 小野さんクエリのデバッグ ===')
       console.log('検索モード:', searchMode)
-      console.log('関連文書数:', relevantKnowledge.length)
-      relevantKnowledge.forEach((doc, index) => {
+      console.log('関連文書数:', finalRelevantKnowledge.length)
+      finalRelevantKnowledge.forEach((doc, index) => {
         console.log(`文書${index + 1}:`, doc.metadata.title, 'by', doc.metadata.author)
       })
       console.log('========================')
@@ -121,32 +156,31 @@ export async function POST(req: NextRequest) {
       content: msg.content
     })) || []
 
-    // 分野横断対応強化版システムプロンプト
-    const systemPrompt = `あなたは中西研究室の人間工学専門RAGアシスタントです。以下の研究データに基づいて回答してください。
+    // ハルシネーション防止強化版システムプロンプト
+    const systemPrompt = `あなたは中西研究室の人間工学専門RAGアシスタントです。
+
+【重要な制約】
+- 提供された研究データに記載されている内容のみに基づいて回答してください
+- データに記載がない情報は絶対に推測や想像で補完しないでください
+- 不明な点は「データに記載されていません」と明記してください
 
 【利用可能な研究データ】
 ${context}
 
-【回答指針】
-1. **分野特定質問への対応**: 「生理指標の研究をしていた人」のような分野・技術に関する質問では、該当する全ての研究者を特定し、具体的な手法と結果を詳細に説明してください
-2. **研究内容の詳細説明**: 使用した技術・手法（Eye-tracking、fNIRS、VAS、心拍変動性等）を具体的に記載
-3. **複数研究の横断的分析**: 同じ分野で複数の研究者がいる場合は、それぞれの特徴と違いを比較説明
-4. **出典を必ず明記**: [著者名]「[タイトル]」(年度)
+【厳密な回答指針】
+1. **データ内容の厳格遵守**: 提供されたデータに記載された内容のみを参照し、外部知識は使用しない
+2. **不明事項の明示**: データに記載がない場合は「提供されたデータには記載されていません」と回答
+3. **正確な引用**: 情報は必ず[著者名]「[タイトル]」(年度)で出典を明記
+4. **推測の禁止**: 「おそらく」「と思われます」「一般的には」などの推測表現は使用しない
 
-【回答パターン例】
-分野についての質問の場合:
-「生理指標を用いた研究を行った研究者は以下の通りです：
+【データにない質問への対応例】
+- 質問に関連する研究が見つからない場合:
+「申し訳ありませんが、提供された研究データには[質問内容]に関する具体的な情報は含まれていません。中西研究室の他の研究資料や、より詳細な検索が必要かもしれません。」
 
-1. 田沼さん「VDT作業における多次元疲労評価システムの開発」(2022)
-   - VAS（Visual Analog Scale）による主観的疲労感測定
-   - 心拍変動性、唾液コルチゾールによる生理指標測定
-   - ウェアラブルデバイスによる長期モニタリング
+- 部分的に関連する研究がある場合:
+「提供されたデータで関連する研究は以下の通りです：[具体的な研究内容]。ただし、[質問の特定部分]については、このデータには詳細な記載がありません。」
 
-2. 八尾敬介さん「認知負荷測定に基づくヒューマンインターフェース設計」(2023)
-   - fNIRS（機能的近赤外分光法）による脳活動測定
-   - Eye-tracking技術による視線解析」
-
-具体的で実用的な情報を提供してください。`
+データに基づく正確で信頼性の高い情報のみを提供してください。`
 
     // OpenAI APIを呼び出し
     console.log('OpenAI API 呼び出し開始...')
@@ -157,7 +191,7 @@ ${context}
         ...conversationHistory,
         { role: 'user', content: message }
       ],
-      temperature: 0.3, // より一貫した回答のため低く設定
+      temperature: 0.1, // ハルシネーション防止のため極めて低く設定
       max_tokens: 1500, // レスポンス時間短縮のため削減
       stream: false
     })
@@ -174,7 +208,12 @@ ${context}
     }
     
     // 使用したソース（引用スニペット付き）
-    const sources = await buildSourcesWithSnippets(message, relevantKnowledge)
+    const sources = await buildSourcesWithSnippets(message, finalRelevantKnowledge)
+    
+    // 最終回答の信頼性確認
+    if (aiResponse.includes('一般的に') || aiResponse.includes('おそらく') || aiResponse.includes('と思われます')) {
+      console.warn('推測表現を含む回答が生成された可能性があります')
+    }
 
     console.log('成功レスポンス送信:', { responseLength: aiResponse.length, sourcesCount: sources.length })
     
