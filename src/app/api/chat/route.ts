@@ -357,14 +357,14 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
   try {
     const nameTokens = (query.match(/[一-龯]{2,6}/g) || [])
     if (nameTokens.length > 0) {
-      const lowerNames = nameTokens
-      const authorMatched = knowledgeBase.filter(doc => {
+      const authorOrTitleMatched = knowledgeBase.filter(doc => {
         const a = (doc.metadata.author || '')
-        return lowerNames.some(n => a.includes(n))
+        const t = (doc.metadata.title || '')
+        return nameTokens.some(n => a.includes(n) || t.includes(n))
       })
-      if (authorMatched.length > 0) {
-        console.log(`Author-guard active: limiting to ${authorMatched.length} docs by names [${nameTokens.join(', ')}]`)
-        return searchWithin(authorMatched)
+      if (authorOrTitleMatched.length > 0) {
+        console.log(`Author-guard active: limiting to ${authorOrTitleMatched.length} docs by [${nameTokens.join(', ')}]`)
+        return searchWithin(authorOrTitleMatched)
       }
     }
   } catch {}

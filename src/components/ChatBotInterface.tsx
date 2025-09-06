@@ -48,6 +48,7 @@ export default function ChatBotInterface() {
   const [isComposing, setIsComposing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase[]>([])
+  const [kbCollapsed, setKbCollapsed] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
   const [searchMode, setSearchMode] = useState<'semantic' | 'keyword'>('semantic')
   const [sendOnEnter, setSendOnEnter] = useState(false) // デフォルトはEnterで改行
@@ -451,6 +452,12 @@ export default function ChatBotInterface() {
             >
               再読み込み
             </button>
+            <button
+              onClick={() => setKbCollapsed(v => !v)}
+              className="mt-2 ml-3 text-xs text-gray-300 hover:text-white"
+            >
+              {kbCollapsed ? 'すべて表示' : '折りたたむ'}
+            </button>
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -466,7 +473,7 @@ export default function ChatBotInterface() {
                 </button>
               </div>
             ) : (
-              knowledgeBase.map((doc) => {
+              (kbCollapsed ? knowledgeBase.slice(0, 10) : knowledgeBase).map((doc) => {
                 const Icon = getTypeIcon(doc.type)
                 return (
                   <div key={doc.id} className="glass-effect rounded-lg p-3">
