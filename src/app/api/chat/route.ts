@@ -364,7 +364,8 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
       })
       if (authorOrTitleMatched.length > 0) {
         console.log(`Author-guard active: limiting to ${authorOrTitleMatched.length} docs by [${nameTokens.join(', ')}]`)
-        return searchWithin(authorOrTitleMatched)
+        // 人名一致時は確実性を優先し、キーワード検索で返す（ベクトル未構築でもヒット）
+        return keywordSearch(authorOrTitleMatched)
       }
     }
   } catch {}
