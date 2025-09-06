@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import pdf from 'pdf-parse'
+import { upsertDocumentByNameAsync, updateDocumentAsync } from '../../../../lib/knowledgeStore'
+import OpenAI from 'openai'
+import { storeDocVectors } from '../../../../lib/vectorStore'
+import { kv } from '@vercel/kv'
+import { upsertDocument as upsertBlobDocument } from '../../../../lib/blobStore'
+const kvEnabled = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN)
+import { preprocessText, inferAuthor } from '../../../../lib/textUtil'
 
-interface StoredDocument {
-  id: string
-  name: string
-  type: 'thesis' | 'paper' | 'document'
-  uploadedAt: string
-  status: 'processing' | 'ready' | 'error'
-  content?: string
-}
-
-const documents: StoredDocument[] = []
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const runtime = 'nodejs'
 
 export async function POST(req: NextRequest) {
   try {
@@ -21,30 +21,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 })
     }
 
-    const documentType: 'thesis' | 'paper' | 'document' = 
+    const docType: 'thesis' | 'paper' | 'document' = 
       file.name.includes('卒論') || file.name.includes('修論') ? 'thesis' :
       file.name.includes('.pdf') ? 'paper' : 'document'
 
-    const newDocument: StoredDocument = {
-      id: Date.now().toString(),
-      name: file.name,
-      type: documentType,
-      uploadedAt: new Date().toISOString(),
-      status: 'processing'
-    }
+    const newDocument = await upsertDocumentByNameAsync(file.name, docType)
 
-    documents.push(newDocument)
-
-    processDocument(newDocument.id, file)
-      .then(() => {
-        console.log(`Document ${newDocument.id} processed successfully`)
-      })
-      .catch((error) => {
-        console.error(`Document ${newDocument.id} processing failed:`, error)
-      })
+    await processDocument(newDocument.id, file, docType)
 
     return NextResponse.json({ 
-      message: 'Upload started',
+      message: 'Upload completed',
       documentId: newDocument.id
     })
 
@@ -57,12 +43,9 @@ export async function POST(req: NextRequest) {
   }
 }
 
-async function processDocument(documentId: string, file: File) {
+async function processDocument(documentId: string, file: File, docType: 'thesis' | 'paper' | 'document') {
   try {
-    const document = documents.find(doc => doc.id === documentId)
-    if (!document) {
-      throw new Error('Document not found')
-    }
+    // 存在チェックは更新時に反映される
 
     const fileBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(fileBuffer)
@@ -78,23 +61,59 @@ async function processDocument(documentId: string, file: File) {
 
     content = preprocessText(content)
     
-    document.content = content
-    document.status = 'ready'
+    // Infer author from filename/content
+    const inferredAuthor = inferAuthor(file.name, content)
+    const uploadedAt = new Date().toISOString()
+
+    await updateDocumentAsync(documentId, { content, status: 'ready', author: inferredAuthor })
+
+    // Optional: vectorize and store in KV if OpenAI is configured
+    try {
+      if (process.env.OPENAI_API_KEY) {
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+        await storeDocVectors(documentId, content, openai)
+      }
+    } catch (e) {
+      console.warn('Vectorization failed, continuing without vectors:', e)
+    }
+
+    // Persist into KV (zset + hash) for listing
+    try {
+      if (!kvEnabled) throw new Error('KV disabled')
+      const doc = {
+        id: documentId,
+        name: file.name,
+        type: docType,
+        uploadedAt,
+        status: 'ready' as const,
+        content,
+        author: inferredAuthor,
+      }
+      await Promise.all([
+        kv.hset(`kb:doc:${documentId}`, doc as unknown as Record<string, unknown>),
+        kv.zadd('kb:docs', { score: Date.now(), member: documentId })
+      ])
+    } catch (e) {
+      console.warn('KV persist (upload) failed:', e)
+    }
+
+    // Persist into Blob metadata (optional, works without KV)
+    try {
+      await upsertBlobDocument({
+        id: documentId,
+        name: file.name,
+        type: docType,
+        uploadedAt,
+        status: 'ready',
+        content,
+        author: inferredAuthor,
+      })
+    } catch (e) {
+      console.warn('Blob metadata persist (upload) failed:', e)
+    }
 
   } catch (error) {
     console.error('Document processing error:', error)
-    
-    const document = documents.find(doc => doc.id === documentId)
-    if (document) {
-      document.status = 'error'
-    }
+    await updateDocumentAsync(documentId, { status: 'error' })
   }
-}
-
-function preprocessText(text: string): string {
-  return text
-    .replace(/\s+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-    .substring(0, 50000)
 }

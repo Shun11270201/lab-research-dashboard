@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
+import { kv } from '@vercel/kv'
+import { getDocumentsAsync } from '../../../lib/knowledgeStore'
+import { getIndexedDocIds, getDocVectors, ensureVectorsGradual } from '../../../lib/vectorStore'
+import { readMetadata, readAllDocuments } from '../../../lib/blobStore'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -18,7 +22,9 @@ function getOpenAI() {
 // 論文データのキャッシュ
 let _thesisCache: KnowledgeDocument[] | null = null
 let _cacheTimestamp: number = 0
-const CACHE_DURATION = 30 * 60 * 1000 // 30分間キャッシュ
+let _cacheKVVersion: number | null = null
+const CACHE_DURATION = 2 * 60 * 1000 // 短縮: 2分キャッシュ
+const VERSION_KEY = 'lab:docs:version'
 // 利用箇所：openai.◯◯ → getOpenAI().◯◯ に置換
 // 例：getOpenAI().chat.completions.create({ ... })
 
@@ -80,10 +86,15 @@ export async function POST(req: NextRequest) {
     })
     
     // コンテキストを構築（より詳細な情報を含める）
-    const context = relevantKnowledge.map(doc => {
+    // 上限: 上位3件・各4,000文字までに制限してトークン超過を防止
+    const MAX_DOCS = 3
+    const MAX_CHARS_PER_DOC = 4000
+    const limitedDocs = relevantKnowledge.slice(0, MAX_DOCS)
+    const context = limitedDocs.map(doc => {
       const authorInfo = doc.metadata.author ? `（著者：${doc.metadata.author}）` : ''
       const yearInfo = doc.metadata.year ? `（${doc.metadata.year}年度）` : ''
-      return `【${doc.metadata.title}】${authorInfo}${yearInfo}\n${doc.content}`
+      const body = (doc.content || '').substring(0, MAX_CHARS_PER_DOC)
+      return `【${doc.metadata.title}】${authorInfo}${yearInfo}\n${body}`
     }).join('\n\n---\n\n')
     
     console.log(`コンテキスト長: ${context.length}`)
@@ -153,8 +164,8 @@ ${context}
       }, { status: 500 })
     }
     
-    // 使用したソースを特定
-    const sources = relevantKnowledge.map(doc => `${doc.metadata.author}「${doc.metadata.title}」(${doc.metadata.year})`)
+    // 使用したソース（引用スニペット付き）
+    const sources = await buildSourcesWithSnippets(message, relevantKnowledge)
 
     console.log('成功レスポンス送信:', { responseLength: aiResponse.length, sourcesCount: sources.length })
     
@@ -192,18 +203,56 @@ ${context}
   }
 }
 
+async function buildSourcesWithSnippets(query: string, docs: KnowledgeDocument[]) {
+  const res: { title: string; snippet?: string }[] = []
+  try {
+    const vecIds = new Set((await getIndexedDocIds()) || [])
+    let queryEmbedding: number[] | null = null
+    for (const doc of docs) {
+      const title = doc.metadata.title
+      if (vecIds.has(doc.id)) {
+        try {
+          if (!queryEmbedding) queryEmbedding = await generateEmbedding(query)
+          const vecs = await getDocVectors(doc.id)
+          if (vecs && vecs.length) {
+            let best = { sim: -1, text: '' }
+            for (const ch of vecs) {
+              const sim = cosineSimilarity(queryEmbedding!, ch.embedding)
+              if (sim > best.sim) best = { sim, text: ch.text }
+            }
+            res.push({ title, snippet: best.text.substring(0, 200) })
+            continue
+          }
+        } catch (e) {
+          // fallthrough
+        }
+      }
+      res.push({ title, snippet: doc.content.substring(0, 160) })
+    }
+  } catch (e) {
+    return docs.map(d => ({ title: d.metadata.title }))
+  }
+  return res
+}
+
 async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
   // キャッシュチェック
   const now = Date.now()
-  if (_thesisCache && (now - _cacheTimestamp) < CACHE_DURATION) {
-    console.log('Using cached thesis data')
-    return _thesisCache
-  }
+  const noCache = !!(req?.headers.get('x-no-cache') === '1' || (req?.headers.get('cache-control') || '').toLowerCase().includes('no-cache'))
+  try {
+    const remoteVersion = await kv.get<number>(VERSION_KEY).catch(() => null as any)
+    const cacheValidByTime = (now - _cacheTimestamp) < CACHE_DURATION
+    const cacheValidByVersion = _cacheKVVersion !== null && remoteVersion !== null && remoteVersion === _cacheKVVersion
+    if (!noCache && _thesisCache && cacheValidByTime && cacheValidByVersion) {
+      console.log('Using cached thesis data (valid by version)')
+      return _thesisCache
+    }
+  } catch {}
 
   try {
     console.log('Loading fresh thesis data...')
     
-    // Use static knowledge base in all cases to avoid circular API calls
+    // Use static knowledge base bundled with the app
     const { knowledgeBase } = await import('../../../data/knowledgeBase')
     
     const thesisData = knowledgeBase.map(doc => ({
@@ -216,10 +265,71 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
         year: doc.metadata.year
       }
     }))
+
+    // Merge uploaded docs from Blob sharded metadata first (優先)
+    try {
+      const shardDocs = await readAllDocuments()
+      if (shardDocs && shardDocs.length > 0) {
+        shardDocs.forEach(d => {
+          const body = (d.content || '').trim()
+          thesisData.push({
+            id: d.id,
+            content: body.length > 0 ? body : `【メタデータのみ】本文抽出不可のためファイル名を記載: ${d.name}`,
+            metadata: { title: d.name, type: d.type as any, author: d.author, year: undefined }
+          })
+        })
+      }
+    } catch (e) {
+      console.warn('Failed to load blob shard metadata, falling back to legacy/store:', e)
+    }
+
+    // Always merge legacy metadata.json as well (docs that were uploaded via UI route)
+    try {
+      const ids = new Set(thesisData.map(d => d.id))
+      const meta = await readMetadata()
+      if (meta && Array.isArray(meta.documents)) {
+        meta.documents.forEach(d => {
+          if (!ids.has(d.id)) {
+            const body = (d.content || '').trim()
+            thesisData.push({
+              id: d.id,
+              content: body.length > 0 ? body : `【メタデータのみ】本文抽出不可のためファイル名を記載: ${d.name}`,
+              metadata: { title: d.name, type: d.type as any, author: d.author, year: undefined }
+            })
+          }
+        })
+      }
+    } catch (e) {
+      console.warn('Legacy blob metadata merge skipped:', e)
+    }
+
+    // Finally merge in-memory/dev store as ultimate fallback
+    try {
+      const ids = new Set(thesisData.map(d => d.id))
+      const uploaded = await getDocumentsAsync()
+      uploaded.forEach(d => {
+        if (!ids.has(d.id)) {
+          const body = (d.content || '').trim()
+          thesisData.push({
+            id: d.id,
+            content: body.length > 0 ? body : `【メタデータのみ】本文抽出不可のためファイル名を記載: ${d.name}`,
+            metadata: { title: d.name, type: d.type, author: d.author, year: undefined }
+          })
+        }
+      })
+    } catch (ee) {
+      console.warn('Fallback store merge failed:', ee)
+    }
     
     // キャッシュを更新
     _thesisCache = thesisData
     _cacheTimestamp = now
+    try {
+      const remoteVersion = await kv.get<number>(VERSION_KEY)
+      _cacheKVVersion = typeof remoteVersion === 'number' ? remoteVersion : now
+    } catch {
+      _cacheKVVersion = now
+    }
     console.log(`Cached ${thesisData.length} thesis documents`)
     
     // データの詳細を確認（デバッグ用）
@@ -238,6 +348,20 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
     console.log(`小野さんの論文数: ${thesisData.filter(doc => doc.metadata.author?.includes('小野')).length}`)
     console.log('===============================')
     
+    // Gradually vectorize internal docs (non-blocking best-effort)
+    try {
+      if (process.env.OPENAI_API_KEY) {
+        await ensureVectorsGradual(
+          thesisData.map(d => ({ id: d.id, content: d.content })),
+          getOpenAI(),
+          3,
+          8000
+        )
+      }
+    } catch (e) {
+      console.warn('Gradual vectorization skipped:', e)
+    }
+
     return thesisData
   } catch (error) {
     console.error('Error loading thesis data:', error)
@@ -263,46 +387,166 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
   const keywords = query.toLowerCase().split(/[\s、，。！？]+/).filter(k => k.length > 0)
   console.log(`検索キーワード: [${keywords.join(', ')}]`)
   
-  const results = knowledgeBase.filter(doc => {
-    const lowerContent = doc.content.toLowerCase()
-    const lowerTitle = doc.metadata.title.toLowerCase()
-    const lowerAuthor = doc.metadata.author?.toLowerCase() || ''
+  // 人名を強く指定するガード（クエリに人名らしき漢字2-6文字が含まれ、DB内に該当著者がいる場合は著者一致の文書に限定）
+  try {
+    const nameTokens = (query.match(/[一-龯]{2,6}/g) || [])
+    if (nameTokens.length > 0) {
+      const authorOrTitleMatched = knowledgeBase.filter(doc => {
+        const a = (doc.metadata.author || '')
+        const t = (doc.metadata.title || '')
+        return nameTokens.some(n => a.includes(n) || t.includes(n))
+      })
+      if (authorOrTitleMatched.length > 0) {
+        console.log(`Author-guard active: limiting to ${authorOrTitleMatched.length} docs by [${nameTokens.join(', ')}]`)
+        // 人名一致時は確実性を優先し、キーワード検索で返す（ベクトル未構築でもヒット）
+        return keywordSearch(authorOrTitleMatched)
+      }
+    }
+  } catch {}
+
+  async function keywordSearch(base: KnowledgeDocument[]): Promise<KnowledgeDocument[]> {
+    // キーワード検索
+    console.log('=== キーワード検索実行中 ===')
+    const baseKeywords = query.toLowerCase().split(/\s+/).filter(Boolean)
+    const kanjiTokens = (query.match(/[一-龯]{2,3}/g) || [])
+    const searchKeywords = Array.from(new Set([...baseKeywords, ...kanjiTokens]))
+    console.log(`キーワード: [${searchKeywords.join(', ')}]`)
     
-    // 優先度付き検索
-    let score = 0
-    
-    keywords.forEach(keyword => {
-      // 著者名での完全・部分マッチ（高得点）
-      if (lowerAuthor.includes(keyword) || keyword.includes(lowerAuthor)) {
-        score += 10
-      }
+    const results = base.filter(doc => {
+      const lowerContent = doc.content.toLowerCase()
+      const lowerTitle = doc.metadata.title.toLowerCase()
+      const lowerAuthor = doc.metadata.author?.toLowerCase() || ''
       
-      // タイトルでのマッチ（中得点）
-      if (lowerTitle.includes(keyword)) {
-        score += 5
-      }
+      // 優先度付き検索（スコアベース）
+      let score = 0
       
-      // 本文でのマッチ（低得点）
-      if (lowerContent.includes(keyword)) {
-        score += 1
-      }
+      searchKeywords.forEach(keyword => {
+        // 著者名での完全・部分マッチ（高得点）
+        if (lowerAuthor.includes(keyword) || keyword.includes(lowerAuthor)) {
+          score += 10
+        }
+        
+        // タイトルでのマッチ（中得点）
+        if (lowerTitle.includes(keyword)) {
+          score += 5
+        }
+        
+        // 本文でのマッチ（低得点）
+        if (lowerContent.includes(keyword)) {
+          score += 1
+        }
+      })
+      
+      doc.searchScore = score
+      return score > 0
     })
     
-    doc.searchScore = score
-    return score > 0
-  })
-  
-  // スコア順にソートして上位5件を返す
-  const sortedResults = results
-    .sort((a, b) => (b.searchScore || 0) - (a.searchScore || 0))
-    .slice(0, 5)
-  
-  console.log(`検索結果: ${sortedResults.length}件`)
-  sortedResults.forEach((doc, index) => {
-    console.log(`  ${index + 1}. ${doc.metadata.title} (著者: ${doc.metadata.author}) - スコア: ${doc.searchScore}`)
-  })
-  
-  return sortedResults
+    // スコア順にソートして上位5件を返す
+    const sortedResults = results
+      .sort((a, b) => (b.searchScore || 0) - (a.searchScore || 0))
+      .slice(0, 5)
+    
+    console.log(`キーワード検索結果: ${sortedResults.length}件`)
+    sortedResults.forEach((doc, index) => {
+      console.log(`  ${index + 1}. ${doc.metadata.title} (著者: ${doc.metadata.author}) - スコア: ${doc.searchScore}`)
+    })
+    
+    return sortedResults
+  }
+
+  async function semanticSearch(base: KnowledgeDocument[]): Promise<KnowledgeDocument[]> {
+    // セマンティック検索（改良版：まず関連文書を絞り込み、その後セマンティック検索）
+    try {
+      // Step 1: キーワードベースで候補を絞り込み（高速）
+      const baseKeywords = query.toLowerCase().split(/\s+/).filter(Boolean)
+      const kanjiTokens = (query.match(/[一-龯]{2,3}/g) || [])
+      const searchKeywords = Array.from(new Set([...baseKeywords, ...kanjiTokens]))
+      let candidates = base
+      
+      // 人名や専門用語での事前フィルタリング
+      const nameKeywords = searchKeywords.filter(k => /^[ぁ-ゖァ-ヺ一-龯]{2,10}$/.test(k))
+      const technicalKeywords = searchKeywords.filter(k => k.length > 2)
+      
+      if (nameKeywords.length > 0 || technicalKeywords.length > 0) {
+        candidates = base.filter(doc => {
+          const lowerContent = doc.content.toLowerCase()
+          const lowerTitle = doc.metadata.title.toLowerCase()
+          const lowerAuthor = doc.metadata.author?.toLowerCase()
+          
+          // 人名での強いマッチング
+          const nameMatch = nameKeywords.some(name => {
+            if (lowerAuthor) {
+              return lowerAuthor.includes(name) || name.includes(lowerAuthor) || 
+                     lowerTitle.includes(name) || lowerContent.includes(name)
+            }
+            return lowerTitle.includes(name) || lowerContent.includes(name)
+          })
+          
+          // 技術用語での関連性チェック
+          const techMatch = technicalKeywords.some(tech => 
+            lowerContent.includes(tech) || lowerTitle.includes(tech)
+          )
+          
+          return nameMatch || techMatch || 
+                 searchKeywords.some(k => lowerContent.includes(k) || lowerTitle.includes(k))
+        })
+        
+        console.log(`Filtered candidates from ${base.length} to ${candidates.length}`)
+      }
+      
+      // Step 2: 候補が多すぎる場合はキーワード検索、少ない場合はセマンティック検索
+      if (candidates.length > 10) {
+        // 多い場合は高速なキーワードベース検索
+        console.log('Using fast keyword-based search due to many candidates')
+        return candidates.slice(0, 5) // 上位5件
+      } else if (candidates.length > 0) {
+        // 適度な候補数でセマンティック検索を実行（KVベクトル優先）
+        console.log(`Performing semantic search on ${candidates.length} candidates`)
+        const queryEmbedding = await generateEmbedding(query)
+        const vecIds = new Set((await getIndexedDocIds()) || [])
+
+        type Scored = { doc: KnowledgeDocument, similarity: number }
+        const scoredDocs: Scored[] = []
+        for (const doc of candidates) {
+          if (vecIds.has(doc.id)) {
+            const vecs = await getDocVectors(doc.id)
+            if (vecs && vecs.length) {
+              let best = 0
+              for (const ch of vecs) {
+                const sim = cosineSimilarity(queryEmbedding, ch.embedding)
+                if (sim > best) best = sim
+              }
+              scoredDocs.push({ doc, similarity: best })
+              continue
+            }
+          }
+          const docEmbedding = await generateEmbedding(doc.content.substring(0, 4000))
+          const similarity = cosineSimilarity(queryEmbedding, docEmbedding)
+          scoredDocs.push({ doc, similarity })
+        }
+
+        return scoredDocs
+          .sort((a, b) => b.similarity - a.similarity)
+          .slice(0, 5)
+          .filter(item => item.similarity > 0.1)
+          .map(item => item.doc)
+      } else {
+        // 候補が少ない場合は全文書を対象にキーワード検索
+        console.log('No specific candidates found, falling back to broad keyword search')
+        return keywordSearch(knowledgeBase)
+      }
+        
+    } catch (error) {
+      console.error('Semantic search error:', error)
+      return keywordSearch(base)
+    }
+  }
+
+  if (searchMode === 'keyword') {
+    return keywordSearch(knowledgeBase)
+  } else {
+    return semanticSearch(knowledgeBase)
+  }
 }
 
 async function generateEmbedding(text: string): Promise<number[]> {

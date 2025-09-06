@@ -23,7 +23,7 @@ interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: Date
-  sources?: string[]
+  sources?: Array<string | { title: string; snippet?: string }>
 }
 
 interface KnowledgeBase {
@@ -45,11 +45,14 @@ export default function ChatBotInterface() {
   ])
   
   const [inputMessage, setInputMessage] = useState('')
+  const [isComposing, setIsComposing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase[]>([])
+  const [kbCollapsed, setKbCollapsed] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
   const [searchMode, setSearchMode] = useState<'semantic' | 'keyword'>('semantic')
   const [systemStatus, setSystemStatus] = useState<any>(null)
+  const [sendOnEnter, setSendOnEnter] = useState(false) // デフォルトはEnterで改行
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -62,6 +65,10 @@ export default function ChatBotInterface() {
     // Load existing knowledge base and system status on mount
     loadKnowledgeBase()
     checkSystemStatus()
+    // 軽い再取得（CDN整合を考慮）
+    const t1 = setTimeout(() => loadKnowledgeBase(true), 8000)
+    const t2 = setTimeout(() => loadKnowledgeBase(true), 20000)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
   }, [])
 
   const checkSystemStatus = async () => {
@@ -81,12 +88,17 @@ export default function ChatBotInterface() {
     }
   }
 
-  const loadKnowledgeBase = async () => {
+  const loadKnowledgeBase = async (noStore = false) => {
     try {
-      const response = await fetch('/api/knowledge-base')
+      const url = `/api/knowledge-base?ts=${Date.now()}`
+      const response = await fetch(url, { cache: noStore ? 'no-store' : 'default' })
       if (response.ok) {
         const data = await response.json()
-        setKnowledgeBase(data.documents || [])
+        const docs = (data.documents || []).map((d: any) => ({
+          ...d,
+          uploadedAt: d.uploadedAt ? new Date(d.uploadedAt) : new Date()
+        }))
+        setKnowledgeBase(docs)
       }
     } catch (error) {
       console.error('Failed to load knowledge base:', error)
@@ -94,6 +106,7 @@ export default function ChatBotInterface() {
   }
 
   const handleSendMessage = async () => {
+    if (loading) return
     if (!inputMessage.trim()) return
 
     const userMessage: Message = {
@@ -112,7 +125,9 @@ export default function ChatBotInterface() {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json; charset=utf-8',
-          'Accept': 'application/json; charset=utf-8'
+          'Accept': 'application/json; charset=utf-8',
+          // 入力直後の反映性を高めるためキャッシュ回避ヘッダを付与
+          'x-no-cache': '1'
         },
         body: JSON.stringify({
           message: inputMessage,
@@ -307,9 +322,22 @@ export default function ChatBotInterface() {
                 </label>
               </div>
               
+              <div className="mt-4 flex items-center gap-3">
+                <input
+                  id="sendOnEnter"
+                  type="checkbox"
+                  checked={sendOnEnter}
+                  onChange={(e) => setSendOnEnter(e.target.checked)}
+                  className="accent-green-500"
+                />
+                <label htmlFor="sendOnEnter" className="text-sm text-gray-300">
+                  Enterで送信（ONの場合、改行は Shift+Enter）
+                </label>
+              </div>
+              
               {/* System Status */}
               {systemStatus && (
-                <div className="p-3 bg-gray-800 rounded-lg text-xs">
+                <div className="mt-4 p-3 bg-gray-800 rounded-lg text-xs">
                   <h4 className="font-semibold mb-2">システム状態</h4>
                   <div className="space-y-1">
                     <div className="flex justify-between">
@@ -368,15 +396,22 @@ export default function ChatBotInterface() {
                     {message.sources && message.sources.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-white/10">
                         <p className="text-xs text-gray-400 mb-2">参考資料:</p>
-                        <div className="flex flex-wrap gap-1">
-                          {message.sources.map((source, index) => (
-                            <span
-                              key={index}
-                              className="px-2 py-1 bg-white/10 rounded text-xs text-gray-300"
-                            >
-                              {source}
-                            </span>
-                          ))}
+                        <div className="flex flex-col gap-2">
+                          {message.sources.map((source, index) => {
+                            const isObj = typeof source === 'object'
+                            const title = isObj ? (source as any).title : String(source)
+                            const snippet = isObj ? (source as any).snippet : undefined
+                            return (
+                              <div key={index} className="px-2 py-2 bg-white/5 rounded">
+                                <div className="text-xs text-gray-200 font-medium">{title}</div>
+                                {snippet && (
+                                  <div className="text-[11px] text-gray-400 mt-1 line-clamp-3">
+                                    {snippet}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
                       </div>
                     )}
@@ -414,13 +449,28 @@ export default function ChatBotInterface() {
           <div className="p-6 border-t border-white/10">
             <div className="flex gap-3">
               <div className="flex-1 relative">
-                <input
-                  type="text"
+                <textarea
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
-                  placeholder="研究に関する質問を入力してください..."
-                  className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded-lg focus:border-green-500 outline-none pr-12"
+                  onCompositionStart={() => setIsComposing(true)}
+                  onCompositionEnd={() => setIsComposing(false)}
+                  onKeyDown={(e) => {
+                    const ne = e.nativeEvent as unknown as { isComposing?: boolean; keyCode?: number }
+                    const composing = isComposing || ne?.isComposing || ne?.keyCode === 229
+                    const isEnter = e.key === 'Enter'
+                    if (composing) return // 変換中は常に無視
+                    // 送信条件: sendOnEnter=ON かつ Enter（Shiftなし） / sendOnEnter=OFF かつ Ctrl(⌘)+Enter
+                    if (isEnter) {
+                      const wantsSend = (sendOnEnter && !e.shiftKey) || (!sendOnEnter && (e.ctrlKey || e.metaKey))
+                      if (wantsSend) {
+                        e.preventDefault()
+                        handleSendMessage()
+                      }
+                    }
+                  }}
+                  placeholder={sendOnEnter ? 'Enterで送信 / 改行は Shift+Enter' : 'Enterで改行 / 送信は Ctrl(⌘)+Enter'}
+                  rows={3}
+                  className="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded-lg focus:border-green-500 outline-none pr-12 resize-y"
                 />
                 <button
                   onClick={() => fileInputRef.current?.click()}
@@ -461,6 +511,18 @@ export default function ChatBotInterface() {
             <p className="text-sm text-gray-400 mt-1">
               学習済み資料: {knowledgeBase.filter(doc => doc.status === 'ready').length}件
             </p>
+            <button
+              onClick={() => loadKnowledgeBase(true)}
+              className="mt-2 text-xs text-green-400 hover:text-green-300"
+            >
+              再読み込み
+            </button>
+            <button
+              onClick={() => setKbCollapsed(v => !v)}
+              className="mt-2 ml-3 text-xs text-gray-300 hover:text-white"
+            >
+              {kbCollapsed ? 'すべて表示' : '折りたたむ'}
+            </button>
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -476,7 +538,7 @@ export default function ChatBotInterface() {
                 </button>
               </div>
             ) : (
-              knowledgeBase.map((doc) => {
+              (kbCollapsed ? knowledgeBase.slice(0, 10) : knowledgeBase).map((doc) => {
                 const Icon = getTypeIcon(doc.type)
                 return (
                   <div key={doc.id} className="glass-effect rounded-lg p-3">
