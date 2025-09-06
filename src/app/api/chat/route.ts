@@ -39,6 +39,7 @@ interface KnowledgeDocument {
     year?: number
   }
   searchScore?: number // 検索スコア用フィールド
+  matchDetails?: string[] // マッチした詳細情報
 }
 
 
@@ -120,24 +121,32 @@ export async function POST(req: NextRequest) {
       content: msg.content
     })) || []
 
-    // 簡潔で効果的なシステムプロンプト
-    const systemPrompt = `あなたは中西研究室のRAGアシスタントです。以下の研究データに基づいて回答してください。
+    // 分野横断対応強化版システムプロンプト
+    const systemPrompt = `あなたは中西研究室の人間工学専門RAGアシスタントです。以下の研究データに基づいて回答してください。
 
 【利用可能な研究データ】
 ${context}
 
 【回答指針】
-1. 上記データの内容を正確に使用して回答
-2. 具体的な研究内容（手法・結果・技術）を詳しく説明
-3. 該当研究がない場合は「該当する研究が見つかりません」と回答
-4. 出典を必ず明記：[著者名]「[タイトル]」(年度)
+1. **分野特定質問への対応**: 「生理指標の研究をしていた人」のような分野・技術に関する質問では、該当する全ての研究者を特定し、具体的な手法と結果を詳細に説明してください
+2. **研究内容の詳細説明**: 使用した技術・手法（Eye-tracking、fNIRS、VAS、心拍変動性等）を具体的に記載
+3. **複数研究の横断的分析**: 同じ分野で複数の研究者がいる場合は、それぞれの特徴と違いを比較説明
+4. **出典を必ず明記**: [著者名]「[タイトル]」(年度)
 
-【回答形式】
-- 研究者名・タイトルの明記
-- 研究内容の詳細説明
-- 参考文献の記載
+【回答パターン例】
+分野についての質問の場合:
+「生理指標を用いた研究を行った研究者は以下の通りです：
 
-簡潔で分かりやすく回答してください。`
+1. 田沼さん「VDT作業における多次元疲労評価システムの開発」(2022)
+   - VAS（Visual Analog Scale）による主観的疲労感測定
+   - 心拍変動性、唾液コルチゾールによる生理指標測定
+   - ウェアラブルデバイスによる長期モニタリング
+
+2. 八尾敬介さん「認知負荷測定に基づくヒューマンインターフェース設計」(2023)
+   - fNIRS（機能的近赤外分光法）による脳活動測定
+   - Eye-tracking技術による視線解析」
+
+具体的で実用的な情報を提供してください。`
 
     // OpenAI APIを呼び出し
     console.log('OpenAI API 呼び出し開始...')
@@ -369,6 +378,48 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
   }
 }
 
+// 質問パターンを分析する関数
+function analyzeQuestion(query: string): { isFieldInquiry: boolean; field?: string; pattern?: string } {
+  const lowerQuery = query.toLowerCase()
+  
+  // 「〜の研究をしていた人」「〜を使った研究」などのパターン
+  const fieldPatterns = [
+    /(.+?)(の|を|に関する|について).*(研究|調査|分析|測定|評価|実験).*(人|者|研究者|学生)/,
+    /(.+?)(を|で|による).*(研究|調査|分析|測定|評価|実験).*(している|した|行った).*(人|者|研究者|学生)/,
+    /(.+?)(の|を|に関する|について).*(研究|調査|分析|測定|評価)/,
+    /(.+?)(を|で).*(使|利用|活用|適用|採用).*(研究|実験)/
+  ]
+  
+  for (const pattern of fieldPatterns) {
+    const match = lowerQuery.match(pattern)
+    if (match) {
+      let field = match[1].trim()
+      
+      // フィールド名を正規化
+      if (field.includes('生理')) field = '生理'
+      if (field.includes('認知')) field = '認知'
+      if (field.includes('疲労')) field = '疲労'
+      if (field.includes('ストレス')) field = 'ストレス'
+      if (field.includes('vr') || field.includes('仮想')) field = 'vr'
+      if (field.includes('エラー') || field.includes('error')) field = 'エラー'
+      if (field.includes('高齢')) field = '高齢者'
+      if (field.includes('航空')) field = '航空'
+      if (field.includes('ユーザビリティ') || field.includes('usability')) field = 'ユーザビリティ'
+      if (field.includes('チーム')) field = 'チーム'
+      if (field.includes('安全')) field = '安全'
+      
+      console.log(`分野特定質問を検出: "${field}" (元: "${match[1]}")`)
+      return { 
+        isFieldInquiry: true, 
+        field, 
+        pattern: match[0] 
+      }
+    }
+  }
+  
+  return { isFieldInquiry: false }
+}
+
 async function searchKnowledge(query: string, searchMode: string = 'semantic', req?: NextRequest): Promise<KnowledgeDocument[]> {
   // Load actual thesis documents
   const knowledgeBase = await loadThesisData(req)
@@ -383,9 +434,20 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
     return []
   }
   
+  // 質問パターン分析
+  const questionAnalysis = analyzeQuestion(query)
+  console.log('質問分析結果:', questionAnalysis)
+  
   // 効率的なキーワード検索（人名・技術用語を優先）
   const keywords = query.toLowerCase().split(/[\s、，。！？]+/).filter(k => k.length > 0)
   console.log(`検索キーワード: [${keywords.join(', ')}]`)
+  
+  // 質問タイプに応じて検索戦略を調整
+  if (questionAnalysis.isFieldInquiry) {
+    console.log(`分野検索モード: ${questionAnalysis.field}`)
+    // 分野に関する質問の場合、必ずキーワード検索で確実にヒット
+    return keywordSearch(knowledgeBase)
+  }
   
   // 人名を強く指定するガード（クエリに人名らしき漢字2-6文字が含まれ、DB内に該当著者がいる場合は著者一致の文書に限定）
   try {
@@ -405,52 +467,93 @@ async function searchKnowledge(query: string, searchMode: string = 'semantic', r
   } catch {}
 
   async function keywordSearch(base: KnowledgeDocument[]): Promise<KnowledgeDocument[]> {
-    // キーワード検索
-    console.log('=== キーワード検索実行中 ===')
+    // キーワード検索（分野・技術キーワード対応強化版）
+    console.log('=== 強化版キーワード検索実行中 ===')
     const baseKeywords = query.toLowerCase().split(/\s+/).filter(Boolean)
     const kanjiTokens = (query.match(/[一-龯]{2,3}/g) || [])
-    const searchKeywords = Array.from(new Set([...baseKeywords, ...kanjiTokens]))
-    console.log(`キーワード: [${searchKeywords.join(', ')}]`)
+    let searchKeywords = Array.from(new Set([...baseKeywords, ...kanjiTokens]))
+    
+    // 分野・技術キーワード拡張マップ
+    const fieldExpansions: { [key: string]: string[] } = {
+      '生理': ['生理指標', 'vas', 'visual analog scale', '心拍', 'コルチゾール', 'fnirs', '生体信号', '生理反応', '血圧', '皮膚電位'],
+      '指標': ['生理指標', '評価指標', '測定指標', 'vas', '心拍変動', 'hrv'],
+      '認知': ['認知負荷', '認知工学', '注意', '記憶', 'eye-tracking', 'fnirs', '認知資源', '認知機能'],
+      '疲労': ['疲労評価', '眼精疲労', 'vdt', 'visual display terminal', '主観的疲労感', '全身疲労'],
+      'ストレス': ['ストレス測定', 'コルチゾール', '心拍変動性', '唾液', '生理指標'],
+      'vr': ['バーチャルリアリティ', '仮想現実', 'hmd', 'head mounted display', '空間認知', 'vr酔い'],
+      'エラー': ['ヒューマンエラー', 'sherpa', '作業エラー', '事故防止', 'iot'],
+      '高齢者': ['高齢', 'ユニバーサルデザイン', '認知機能', '加齢', 'タブレット'],
+      '航空': ['航空安全', 'asrs', 'レジリエンス', 'コンピテンス', '緊急着水'],
+      'ユーザビリティ': ['usability', 'sd法', 'ahp', '感性工学', 'ux'],
+      'チーム': ['チームワーク', '協調', '航空管制', 'コミュニケーション', 'human factors'],
+      '安全': ['安全人間工学', '危険予知', '事故防止', 'heinrich', 'ヒヤリハット', 'リスク評価']
+    }
+    
+    // キーワード拡張
+    const expandedKeywords = new Set(searchKeywords)
+    searchKeywords.forEach(keyword => {
+      for (const [field, expansions] of Object.entries(fieldExpansions)) {
+        if (keyword.includes(field) || field.includes(keyword)) {
+          expansions.forEach(exp => expandedKeywords.add(exp))
+        }
+      }
+    })
+    
+    const finalKeywords = Array.from(expandedKeywords)
+    console.log(`元キーワード: [${searchKeywords.join(', ')}]`)
+    console.log(`拡張後キーワード: [${finalKeywords.join(', ')}]`)
     
     const results = base.filter(doc => {
       const lowerContent = doc.content.toLowerCase()
       const lowerTitle = doc.metadata.title.toLowerCase()
       const lowerAuthor = doc.metadata.author?.toLowerCase() || ''
       
-      // 優先度付き検索（スコアベース）
+      // 複数レベルのスコアリング
       let score = 0
+      let matchedKeywords: string[] = []
       
-      searchKeywords.forEach(keyword => {
-        // 著者名での完全・部分マッチ（高得点）
-        if (lowerAuthor.includes(keyword) || keyword.includes(lowerAuthor)) {
-          score += 10
+      finalKeywords.forEach(keyword => {
+        const keywordLower = keyword.toLowerCase()
+        
+        // 著者名マッチ（最高得点）
+        if (lowerAuthor.includes(keywordLower) || keywordLower.includes(lowerAuthor)) {
+          score += 15
+          matchedKeywords.push(`著者:${keyword}`)
         }
         
-        // タイトルでのマッチ（中得点）
-        if (lowerTitle.includes(keyword)) {
-          score += 5
+        // タイトルマッチ（高得点）
+        if (lowerTitle.includes(keywordLower)) {
+          score += 8
+          matchedKeywords.push(`タイトル:${keyword}`)
         }
         
-        // 本文でのマッチ（低得点）
-        if (lowerContent.includes(keyword)) {
-          score += 1
+        // 本文での複数回出現チェック
+        const contentMatches = (lowerContent.match(new RegExp(keywordLower, 'g')) || []).length
+        if (contentMatches > 0) {
+          // 複数回出現する場合は高得点
+          score += contentMatches > 2 ? 5 : contentMatches > 1 ? 3 : 1
+          matchedKeywords.push(`本文:${keyword}(${contentMatches}回)`)
         }
       })
       
-      doc.searchScore = score
+      // デバッグ情報保存
+      if (score > 0) {
+        doc.searchScore = score
+        doc.matchDetails = matchedKeywords
+        console.log(`マッチ文書: ${doc.metadata.title} (著者: ${doc.metadata.author}) - スコア: ${score}`)
+        console.log(`  マッチ詳細: ${matchedKeywords.join(', ')}`)
+      }
+      
       return score > 0
     })
     
-    // スコア順にソートして上位5件を返す
+    // スコア順にソート（高スコア順）
     const sortedResults = results
       .sort((a, b) => (b.searchScore || 0) - (a.searchScore || 0))
       .slice(0, 5)
     
-    console.log(`キーワード検索結果: ${sortedResults.length}件`)
-    sortedResults.forEach((doc, index) => {
-      console.log(`  ${index + 1}. ${doc.metadata.title} (著者: ${doc.metadata.author}) - スコア: ${doc.searchScore}`)
-    })
-    
+    console.log(`強化版検索結果: ${sortedResults.length}件`)
+    console.log('========================')
     return sortedResults
   }
 

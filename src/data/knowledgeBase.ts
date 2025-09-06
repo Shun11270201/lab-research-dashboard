@@ -9,6 +9,7 @@ export interface KnowledgeDocument {
     year?: number
   }
   searchScore?: number // 検索スコア用フィールド追加
+  matchDetails?: string[] // マッチした詳細情報
 }
 
 export const knowledgeBase: KnowledgeDocument[] = [
