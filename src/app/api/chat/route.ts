@@ -341,20 +341,43 @@ async function loadThesisData(req?: NextRequest): Promise<KnowledgeDocument[]> {
     }
     console.log(`Cached ${thesisData.length} thesis documents`)
     
-    // データの詳細を確認（デバッグ用）
+    // データの詳細を確認（デバッグ用）- 全データソース確認
     console.log('=== ロードされた論文データの詳細 ===')
-    thesisData.forEach((doc, index) => {
-      if (doc.metadata.author && doc.metadata.author.includes('小野')) {
-        console.log(`小野さんの論文発見 [${index}]:`)
-        console.log(`  ID: ${doc.id}`)
-        console.log(`  著者: ${doc.metadata.author}`)
-        console.log(`  タイトル: ${doc.metadata.title}`)
-        console.log(`  コンテンツ長: ${doc.content.length}`)
-        console.log(`  コンテンツ先頭200文字: "${doc.content.substring(0, 200)}"`)
-        console.log('---')
-      }
+    console.log(`総文書数: ${thesisData.length}`)
+    
+    // 各データソース別に確認
+    const staticDocs = thesisData.filter(doc => doc.id.startsWith('thesis_'))
+    const uploadedDocs = thesisData.filter(doc => !doc.id.startsWith('thesis_'))
+    console.log(`静的データ: ${staticDocs.length}件`)
+    console.log(`アップロードデータ: ${uploadedDocs.length}件`)
+    
+    // アップロードされた文書の詳細表示
+    if (uploadedDocs.length > 0) {
+      console.log('--- アップロードされた文書 ---')
+      uploadedDocs.forEach((doc, index) => {
+        console.log(`  [${index + 1}] ID: ${doc.id}`)
+        console.log(`      著者: ${doc.metadata.author || '未設定'}`)
+        console.log(`      タイトル: ${doc.metadata.title}`)
+        console.log(`      コンテンツ長: ${doc.content.length}`)
+        console.log(`      先頭100文字: "${doc.content.substring(0, 100)}"`)
+        console.log('  ---')
+      })
+    }
+    
+    // 特定の研究者をチェック（松下、小野など）
+    const targetNames = ['松下', '小野']
+    targetNames.forEach(name => {
+      const matchedDocs = thesisData.filter(doc => 
+        doc.metadata.author?.includes(name) || 
+        doc.metadata.title?.includes(name) ||
+        doc.content.includes(name)
+      )
+      console.log(`${name}さん関連の文書数: ${matchedDocs.length}`)
+      matchedDocs.forEach((doc, idx) => {
+        console.log(`  ${idx + 1}. ${doc.metadata.author} - ${doc.metadata.title}`)
+      })
     })
-    console.log(`小野さんの論文数: ${thesisData.filter(doc => doc.metadata.author?.includes('小野')).length}`)
+    
     console.log('===============================')
     
     // Gradually vectorize internal docs (non-blocking best-effort)
